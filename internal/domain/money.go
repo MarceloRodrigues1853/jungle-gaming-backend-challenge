@@ -1,3 +1,5 @@
+// Package domain contém os tipos e as regras centrais do domínio financeiro.
+// Ele não depende de banco de dados, transporte HTTP ou mensageria.
 package domain
 
 import (
@@ -10,19 +12,26 @@ import (
 )
 
 var (
-	ErrInvalidMoney     = errors.New("invalid money")
+	// ErrInvalidMoney indica que o valor ou a moeda não seguem o formato aceito.
+	ErrInvalidMoney = errors.New("invalid money")
+	// ErrCurrencyMismatch indica uma operação entre valores de moedas diferentes.
 	ErrCurrencyMismatch = errors.New("currency mismatch")
-	ErrMoneyOverflow    = errors.New("money overflow")
-	moneyPattern        = regexp.MustCompile(`^(0|[1-9][0-9]*)\.([0-9]{2})$`)
-	currencyPattern     = regexp.MustCompile(`^[A-Z]{3}$`)
+	// ErrMoneyOverflow indica que uma operação excederia os limites de int64.
+	ErrMoneyOverflow = errors.New("money overflow")
+	// O formato exige duas casas decimais e não aceita sinal, zeros à esquerda ou expoente.
+	moneyPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.([0-9]{2})$`)
+	// O domínio valida a forma ISO 4217; a lista suportada é decisão da aplicação.
+	currencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
 )
 
-// Money stores exact monetary values in minor units. It never uses floating point.
+// Money representa um valor monetário exato em unidades mínimas (centavos).
+// Seus campos privados impedem alterações diretas e evitam ponto flutuante.
 type Money struct {
 	minor    int64
 	currency string
 }
 
+// ParseMoney valida o formato decimal fixo e converte o valor para unidades mínimas.
 func ParseMoney(amount, currency string) (Money, error) {
 	if !currencyPattern.MatchString(currency) {
 		return Money{}, fmt.Errorf("%w: currency must be an ISO 4217 code", ErrInvalidMoney)
@@ -47,14 +56,18 @@ func ParseMoney(amount, currency string) (Money, error) {
 	return Money{minor: minor + fraction, currency: currency}, nil
 }
 
+// Zero cria o valor zero para uma moeda válida.
 func Zero(currency string) (Money, error) {
 	return ParseMoney("0.00", currency)
 }
 
+// MinorUnits retorna o valor inteiro armazenado, sem conversão para ponto flutuante.
 func (m Money) MinorUnits() int64 { return m.minor }
 
+// Currency retorna o código da moeda associado ao valor.
 func (m Money) Currency() string { return m.currency }
 
+// String formata o valor com duas casas decimais, preservando sinal interno negativo.
 func (m Money) String() string {
 	whole := m.minor / 100
 	fraction := m.minor % 100
@@ -67,6 +80,7 @@ func (m Money) String() string {
 	return fmt.Sprintf("%d.%02d", whole, fraction)
 }
 
+// Add soma valores da mesma moeda e rejeita resultados fora do intervalo de int64.
 func (m Money) Add(other Money) (Money, error) {
 	if err := m.sameCurrency(other); err != nil {
 		return Money{}, err
@@ -78,6 +92,7 @@ func (m Money) Add(other Money) (Money, error) {
 	return Money{minor: m.minor + other.minor, currency: m.currency}, nil
 }
 
+// Subtract subtrai outro valor da mesma moeda e propaga erros de moeda ou overflow.
 func (m Money) Subtract(other Money) (Money, error) {
 	negated, err := other.Negate()
 	if err != nil {
@@ -86,6 +101,7 @@ func (m Money) Subtract(other Money) (Money, error) {
 	return m.Add(negated)
 }
 
+// Negate inverte o sinal; o menor int64 é rejeitado porque seu oposto não cabe em int64.
 func (m Money) Negate() (Money, error) {
 	if m.minor == math.MinInt64 {
 		return Money{}, ErrMoneyOverflow
@@ -93,6 +109,7 @@ func (m Money) Negate() (Money, error) {
 	return Money{minor: -m.minor, currency: m.currency}, nil
 }
 
+// Compare compara valores da mesma moeda: -1, 0 ou 1 conforme m seja menor, igual ou maior.
 func (m Money) Compare(other Money) (int, error) {
 	if err := m.sameCurrency(other); err != nil {
 		return 0, err
@@ -107,10 +124,13 @@ func (m Money) Compare(other Money) (int, error) {
 	}
 }
 
+// IsNegative informa se o valor é negativo; isso pode ocorrer em cálculos internos.
 func (m Money) IsNegative() bool { return m.minor < 0 }
 
+// IsZero informa se o valor não representa movimentação monetária.
 func (m Money) IsZero() bool { return m.minor == 0 }
 
+// sameCurrency centraliza a validação exigida por operações monetárias.
 func (m Money) sameCurrency(other Money) error {
 	if strings.TrimSpace(m.currency) == "" || m.currency != other.currency {
 		return ErrCurrencyMismatch

@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+// TestParseMoney cobre entradas aceitas e formatos externos que devem ser rejeitados.
 func TestParseMoney(t *testing.T) {
 	t.Parallel()
 
@@ -40,6 +41,7 @@ func TestParseMoney(t *testing.T) {
 	}
 }
 
+// TestMoneyOperations verifica aritmética exata e incompatibilidade entre moedas.
 func TestMoneyOperations(t *testing.T) {
 	t.Parallel()
 
@@ -62,6 +64,7 @@ func TestMoneyOperations(t *testing.T) {
 	}
 }
 
+// TestMoneyOverflow garante que a soma não ultrapasse a capacidade de int64.
 func TestMoneyOverflow(t *testing.T) {
 	t.Parallel()
 

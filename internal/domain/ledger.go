@@ -7,15 +7,21 @@ import (
 	"time"
 )
 
+// ErrInvalidLedgerEntry indica que um lançamento não representa uma movimentação coerente.
 var ErrInvalidLedgerEntry = errors.New("invalid ledger entry")
 
+// LedgerDirection define como o lançamento afeta o saldo da carteira.
 type LedgerDirection string
 
 const (
-	LedgerDebit  LedgerDirection = "DEBIT"
+	// LedgerDebit representa uma saída de fundos da carteira.
+	LedgerDebit LedgerDirection = "DEBIT"
+	// LedgerCredit representa uma entrada de fundos na carteira.
 	LedgerCredit LedgerDirection = "CREDIT"
 )
 
+// WalletLedgerEntry registra uma movimentação e os saldos antes e depois dela.
+// Após persistido, o lançamento deve ser tratado como imutável.
 type WalletLedgerEntry struct {
 	ID            string
 	WalletID      string
@@ -27,6 +33,8 @@ type WalletLedgerEntry struct {
 	CreatedAt     time.Time
 }
 
+// NewWalletLedgerEntry cria um lançamento somente se a equação financeira estiver correta.
+// A mesma validação também será reforçada por constraints no banco de dados.
 func NewWalletLedgerEntry(id, walletID, transactionID string, direction LedgerDirection, money, before, after Money, now time.Time) (WalletLedgerEntry, error) {
 	if strings.TrimSpace(id) == "" || strings.TrimSpace(walletID) == "" || strings.TrimSpace(transactionID) == "" || now.IsZero() {
 		return WalletLedgerEntry{}, fmt.Errorf("%w: identifiers and timestamp are required", ErrInvalidLedgerEntry)

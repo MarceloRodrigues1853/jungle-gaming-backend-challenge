@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// TestWalletDebitAndCredit verifica saldo, versionamento e rejeição sem efeitos colaterais.
 func TestWalletDebitAndCredit(t *testing.T) {
 	t.Parallel()
 
@@ -43,6 +44,7 @@ func TestWalletDebitAndCredit(t *testing.T) {
 	}
 }
 
+// TestWalletRejectsCurrencyMismatch impede movimentações na moeda errada.
 func TestWalletRejectsCurrencyMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -54,6 +56,7 @@ func TestWalletRejectsCurrencyMismatch(t *testing.T) {
 	}
 }
 
+// TestLedgerEntryValidatesBalanceEquation valida a equação de saldo do lançamento.
 func TestLedgerEntryValidatesBalanceEquation(t *testing.T) {
 	t.Parallel()
 
