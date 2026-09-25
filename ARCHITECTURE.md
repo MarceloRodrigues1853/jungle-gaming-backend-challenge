@@ -65,6 +65,20 @@ código estável de rejeição será feita pelo caso de uso da aplicação.
 do payload e o algoritmo/campos exatos do hash serão definidos no caso de uso comum
 de HTTP e SQS, ainda não implementado.
 
+### Processamento financeiro em memória
+
+`ProcessWagerTransaction` coordena, em memória, a validação do vínculo com a carteira,
+a aplicação do movimento, a criação do lançamento e a transição da transação para
+`PROCESSED`. Carteira e transação são trabalhadas em cópias e publicadas juntas apenas
+quando todas as validações passam. `LOSS` é processada sem lançamento ou incremento da
+versão da carteira. Saldo insuficiente rejeita a transação sem alterar carteira nem
+criar ledger; uma reversão que exigiria saldo indisponível usa o código estável
+`REVERSAL_INSUFFICIENT_BALANCE`, distinto de `INSUFFICIENT_FUNDS` para aposta.
+
+Essa atomicidade vale somente dentro desta chamada no processo. Ela não protege contra
+concorrência entre requisições nem substitui uma transação PostgreSQL; bloqueio/controle
+de versão e gravação atômica serão responsabilidade do caso de uso e repositório.
+
 ## Próximas decisões e trabalho pendente
 
 Ainda não estão implementados os adaptadores e garantias de execução: transações SQL
