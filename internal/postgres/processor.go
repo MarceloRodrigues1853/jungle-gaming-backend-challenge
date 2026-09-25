@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,14 @@ import (
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/domain"
 	"github.com/jackc/pgx/v5"
 )
+
+// persistedIdentity reúne os campos necessários para reconhecer uma repetição legítima.
+type persistedIdentity struct {
+	id, externalID, idempotencyKey, status string
+	payloadHash                            []byte
+	failureCode                            *string
+	resultBalance                          *int64
+}
 
 // ProcessWagerTransaction grava a transação, o saldo e o ledger no mesmo commit SQL.
 // O lock fica restrito à carteira afetada, permitindo paralelismo entre carteiras distintas.
@@ -31,8 +40,19 @@ func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction dom
 		return domain.WagerProcessingResult{}, err
 	}
 	initialWalletVersion := wallet.Version()
-	if err := insertPendingTransaction(ctx, dbtx, transaction); err != nil {
+	inserted, err := insertPendingTransaction(ctx, dbtx, transaction)
+	if err != nil {
 		return domain.WagerProcessingResult{}, err
+	}
+	if !inserted {
+		result, err := loadIdempotentReplay(ctx, dbtx, transaction)
+		if err != nil {
+			return domain.WagerProcessingResult{}, err
+		}
+		if err := dbtx.Commit(ctx); err != nil {
+			return domain.WagerProcessingResult{}, fmt.Errorf("finish idempotent replay: %w", err)
+		}
+		return result, nil
 	}
 
 	result, err := domain.ProcessWagerTransaction(&wallet, &transaction, reference, ledgerEntryID, now)
@@ -89,13 +109,13 @@ func lockWallet(ctx context.Context, tx pgx.Tx, walletID, playerID, currency str
 }
 
 // insertPendingTransaction grava o estado aceito antes de persistir seu resultado final na mesma transação SQL.
-func insertPendingTransaction(ctx context.Context, tx pgx.Tx, transaction domain.WagerTransaction) error {
+func insertPendingTransaction(ctx context.Context, tx pgx.Tx, transaction domain.WagerTransaction) (bool, error) {
 	snapshot := transaction.Snapshot()
 	source := "EXTERNAL"
 	if snapshot.Kind == domain.TransactionOpening {
 		source = "INTERNAL"
 	}
-	_, err := tx.Exec(ctx, `
+	query := `
 		INSERT INTO wager_transactions (
 			id, source, provider_id, external_transaction_id, idempotency_key, payload_hash,
 			wallet_id, player_id, currency, round_id, game_id, kind, amount_minor,
@@ -104,7 +124,8 @@ func insertPendingTransaction(ctx context.Context, tx pgx.Tx, transaction domain
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
 			$14, $15, $16, $17, $18, $19, $20, $21
-		)`,
+		)`
+	args := []any{
 		snapshot.ID, source, nullableText(snapshot.ProviderID), nullableText(snapshot.ExternalTransactionID),
 		nullableText(snapshot.IdempotencyKey), nullableBytes(snapshot.PayloadHash), snapshot.WalletID,
 		snapshot.PlayerID, snapshot.Money.Currency(), nullableText(snapshot.RoundID), nullableText(snapshot.GameID),
@@ -112,9 +133,84 @@ func insertPendingTransaction(ctx context.Context, tx pgx.Tx, transaction domain
 		nullableText(snapshot.ReferenceID), string(snapshot.Status), nullableText(snapshot.FailureCode),
 		nullableMoney(snapshot.ResultBalance, snapshot.HasResultBalance), snapshot.CreatedAt, snapshot.UpdatedAt,
 		nullableTime(snapshot.ProcessedAt),
-	)
+	}
+	if source == "EXTERNAL" {
+		var insertedID string
+		err := tx.QueryRow(ctx, query+` ON CONFLICT DO NOTHING RETURNING id`, args...).Scan(&insertedID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("insert pending wager transaction: %w", err)
+		}
+		return true, nil
+	}
+	if _, err := tx.Exec(ctx, query, args...); err != nil {
+		return false, fmt.Errorf("insert pending wager transaction: %w", err)
+	}
+	return true, nil
+}
+
+// loadIdempotentReplay devolve o resultado persistido somente quando identidades e conteúdo coincidem.
+func loadIdempotentReplay(ctx context.Context, tx pgx.Tx, candidate domain.WagerTransaction) (domain.WagerProcessingResult, error) {
+	snapshot := candidate.Snapshot()
+	rows, err := tx.Query(ctx, `
+		SELECT id, external_transaction_id, idempotency_key, payload_hash,
+			status, failure_code, result_balance_minor
+		FROM wager_transactions
+		WHERE source = 'EXTERNAL' AND provider_id = $1
+			AND (external_transaction_id = $2 OR idempotency_key = $3)
+		ORDER BY id
+		LIMIT 2
+		FOR UPDATE`, snapshot.ProviderID, snapshot.ExternalTransactionID, snapshot.IdempotencyKey)
 	if err != nil {
-		return fmt.Errorf("insert pending wager transaction: %w", err)
+		return domain.WagerProcessingResult{}, fmt.Errorf("lookup idempotent transaction: %w", err)
+	}
+	defer rows.Close()
+
+	var matches []persistedIdentity
+	for rows.Next() {
+		var item persistedIdentity
+		if err := rows.Scan(&item.id, &item.externalID, &item.idempotencyKey, &item.payloadHash,
+			&item.status, &item.failureCode, &item.resultBalance); err != nil {
+			return domain.WagerProcessingResult{}, fmt.Errorf("scan idempotent transaction: %w", err)
+		}
+		matches = append(matches, item)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.WagerProcessingResult{}, fmt.Errorf("iterate idempotent transactions: %w", err)
+	}
+	if len(matches) != 1 {
+		return domain.WagerProcessingResult{}, fmt.Errorf("%w: external identity does not resolve to one transaction", ErrIdempotencyConflict)
+	}
+
+	existing := matches[0]
+	if err := validateReplayIdentity(snapshot, existing); err != nil {
+		return domain.WagerProcessingResult{}, err
+	}
+
+	result := domain.WagerProcessingResult{
+		TransactionID:    existing.id,
+		Status:           domain.TransactionStatus(existing.status),
+		IdempotentReplay: true,
+	}
+	if existing.failureCode != nil {
+		result.FailureCode = *existing.failureCode
+	}
+	if existing.resultBalance != nil {
+		result.Balance, err = domain.MoneyFromMinorUnits(*existing.resultBalance, snapshot.Money.Currency())
+		if err != nil {
+			return domain.WagerProcessingResult{}, fmt.Errorf("restore replay result balance: %w", err)
+		}
+		result.HasBalance = true
+	}
+	return result, nil
+}
+
+// validateReplayIdentity impede reutilizar um resultado quando chave, ID externo ou conteúdo mudam.
+func validateReplayIdentity(candidate domain.WagerTransactionSnapshot, existing persistedIdentity) error {
+	if existing.externalID != candidate.ExternalTransactionID || existing.idempotencyKey != candidate.IdempotencyKey || !bytes.Equal(existing.payloadHash, candidate.PayloadHash) {
+		return fmt.Errorf("%w: key, external id, or payload differs", ErrIdempotencyConflict)
 	}
 	return nil
 }

@@ -16,10 +16,14 @@ const (
 // WagerProcessingResult resume o resultado financeiro aplicado à carteira.
 // LedgerEntry fica nil quando a operação não produz movimento ou é rejeitada.
 type WagerProcessingResult struct {
-	Status        TransactionStatus
-	Balance       Money
-	WalletVersion int64
-	LedgerEntry   *WalletLedgerEntry
+	TransactionID    string
+	Status           TransactionStatus
+	FailureCode      string
+	Balance          Money
+	HasBalance       bool
+	WalletVersion    int64
+	LedgerEntry      *WalletLedgerEntry
+	IdempotentReplay bool
 }
 
 // ProcessWagerTransaction aplica a regra da transação à carteira e finaliza seu estado.
@@ -87,8 +91,10 @@ func ProcessWagerTransaction(wallet *Wallet, transaction *WagerTransaction, refe
 	*wallet = walletCandidate
 	*transaction = transactionCandidate
 	return WagerProcessingResult{
+		TransactionID: transaction.id,
 		Status:        transaction.status,
 		Balance:       wallet.balance,
+		HasBalance:    transaction.hasResultBalance,
 		WalletVersion: wallet.version,
 		LedgerEntry:   ledgerEntry,
 	}, nil
@@ -97,8 +103,11 @@ func ProcessWagerTransaction(wallet *Wallet, transaction *WagerTransaction, refe
 // processingResult representa uma rejeição sem alterar o estado financeiro da carteira.
 func processingResult(wallet *Wallet, transaction *WagerTransaction) WagerProcessingResult {
 	return WagerProcessingResult{
+		TransactionID: transaction.id,
 		Status:        transaction.status,
+		FailureCode:   transaction.failureCode,
 		Balance:       wallet.balance,
+		HasBalance:    false,
 		WalletVersion: wallet.version,
 	}
 }

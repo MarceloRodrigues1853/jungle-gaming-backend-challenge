@@ -93,17 +93,23 @@ transação, sem saldo nem ledger. `LOSS` não atualiza a carteira. O lock é po
 carteira: operações da mesma carteira são serializadas, mas carteiras independentes
 podem avançar em paralelo em processos distintos.
 
-O adaptador ainda não implementa replay de idempotência: colisões dos índices únicos
-propagam erro do PostgreSQL e a leitura do resultado já persistido ficará para a etapa
-de idempotência. Também não há publicação de outbox nesta operação ainda; o registro
-atômico dos eventos será adicionado antes de expor os fluxos HTTP/SQS.
+O adaptador trata colisões dos índices únicos como possível replay: procura o registro
+do mesmo provedor pela chave ou pelo ID externo e só devolve o resultado anterior quando
+ambas as identidades e o hash do payload coincidem. Qualquer divergência resulta em
+`ErrIdempotencyConflict`, sem nova movimentação. O saldo de replay vem de
+`result_balance_minor`, não do saldo atual da carteira. O cálculo/canonicalização do
+hash ainda pertence ao caso de uso comum de HTTP e SQS, que deve produzir os mesmos 32
+bytes para o mesmo conteúdo de negócio.
+
+Ainda não há publicação de outbox nesta operação; o registro atômico dos eventos será
+adicionado antes de expor os fluxos HTTP/SQS.
 
 ## Próximas decisões e trabalho pendente
 
-Ainda não estão implementados os adaptadores e garantias de execução: transações SQL
-e coordenação por carteira, idempotência persistente, referência pendente com retry e
-expiração, mapeamento dos conflitos de reversão para códigos de rejeição, inbox/outbox,
-autenticação e isolamento por provedor, composição e lifecycle com Uber Fx, API HTTP,
-consumidor SQS, métricas, logs estruturados, Docker Compose e testes de integração com
-serviços reais. As estratégias para esses pontos serão documentadas junto com cada
-etapa, antes de serem apresentadas como garantias da solução.
+Ainda estão pendentes a canonicalização comum do payload entre HTTP/SQS, retomada de
+referências pendentes com retry e expiração, mapeamento de conflitos de reversão para
+códigos de rejeição, inbox/outbox, autenticação e isolamento por provedor, composição
+e lifecycle com Uber Fx, API HTTP, consumidor SQS, métricas, logs estruturados, Docker
+Compose e testes de integração/concorrência com serviços reais. As estratégias para
+esses pontos serão documentadas junto com cada etapa, antes de serem apresentadas como
+garantias da solução.
