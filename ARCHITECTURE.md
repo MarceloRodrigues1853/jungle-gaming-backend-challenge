@@ -79,6 +79,25 @@ Essa atomicidade vale somente dentro desta chamada no processo. Ela não protege
 concorrência entre requisições nem substitui uma transação PostgreSQL; bloqueio/controle
 de versão e gravação atômica serão responsabilidade do caso de uso e repositório.
 
+### Persistência PostgreSQL
+
+O adaptador `internal/postgres` usa `pgx/v5` com SQL explícito. `Money` é mapeado para
+`BIGINT` em unidades mínimas e a moeda segue em coluna `CHAR(3)`; a reidratação usa
+`MoneyFromMinorUnits`, sem conversões para ponto flutuante.
+
+`Store.ProcessWagerTransaction` abre uma transação `READ COMMITTED`, bloqueia a linha
+da carteira por `SELECT ... FOR UPDATE`, insere a operação pendente, aplica as regras
+do domínio e grava o saldo alterado, o resultado da operação e o lançamento no ledger
+antes do mesmo `COMMIT`. Uma rejeição de negócio também fica auditável no registro da
+transação, sem saldo nem ledger. `LOSS` não atualiza a carteira. O lock é por linha de
+carteira: operações da mesma carteira são serializadas, mas carteiras independentes
+podem avançar em paralelo em processos distintos.
+
+O adaptador ainda não implementa replay de idempotência: colisões dos índices únicos
+propagam erro do PostgreSQL e a leitura do resultado já persistido ficará para a etapa
+de idempotência. Também não há publicação de outbox nesta operação ainda; o registro
+atômico dos eventos será adicionado antes de expor os fluxos HTTP/SQS.
+
 ## Próximas decisões e trabalho pendente
 
 Ainda não estão implementados os adaptadores e garantias de execução: transações SQL

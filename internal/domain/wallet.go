@@ -64,6 +64,9 @@ func (w Wallet) Balance() Money { return w.balance }
 // Version retorna a versão usada para controle de concorrência na persistência.
 func (w Wallet) Version() int64 { return w.version }
 
+// UpdatedAt retorna o instante da última alteração persistida do agregado.
+func (w Wallet) UpdatedAt() time.Time { return w.updatedAt }
+
 // Credit credita um valor positivo e avança saldo, versão e instante de atualização.
 func (w *Wallet) Credit(amount Money, now time.Time) error {
 	if amount.IsNegative() || amount.IsZero() {

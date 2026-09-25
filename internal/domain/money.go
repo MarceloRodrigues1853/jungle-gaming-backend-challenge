@@ -61,6 +61,14 @@ func Zero(currency string) (Money, error) {
 	return ParseMoney("0.00", currency)
 }
 
+// MoneyFromMinorUnits reidrata um valor exato vindo de uma fonte persistente.
+func MoneyFromMinorUnits(minor int64, currency string) (Money, error) {
+	if !currencyPattern.MatchString(currency) {
+		return Money{}, fmt.Errorf("%w: currency must be an ISO 4217 code", ErrInvalidMoney)
+	}
+	return Money{minor: minor, currency: currency}, nil
+}
+
 // MinorUnits retorna o valor inteiro armazenado, sem conversão para ponto flutuante.
 func (m Money) MinorUnits() int64 { return m.minor }
 

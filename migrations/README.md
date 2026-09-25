@@ -29,3 +29,9 @@ dados que precisem ser preservados.
 Cada migration controla sua própria transação. `ON_ERROR_STOP` faz o `psql` encerrar
 no primeiro erro. Aplicação e rollback automatizados pelo binário da aplicação ainda
 serão adicionados quando a composição da infraestrutura for implementada.
+
+O adaptador `internal/postgres` utiliza `pgx/v5` e persiste uma operação financeira
+com `READ COMMITTED` e `SELECT ... FOR UPDATE` na linha da carteira. A inserção da
+transação, alteração de saldo, registro do resultado e lançamento de ledger pertencem
+ao mesmo commit; veja `ARCHITECTURE.md` para o limite exato e as garantias ainda
+pendentes, incluindo replay de idempotência e outbox.
