@@ -215,21 +215,116 @@ func (tx *WagerTransaction) MarkPendingReference(now time.Time) error {
 	return nil
 }
 
-// ResolveReference registra a referência interna e devolve a operação à fila de processamento.
-func (tx *WagerTransaction) ResolveReference(referenceID string, now time.Time) error {
-	if tx.status != TransactionPendingReference {
+// ValidateReference confere se a transação persistida pode ser usada como referência.
+func (tx WagerTransaction) ValidateReference(reference WagerTransaction) error {
+	if !tx.canFinish() {
 		return tx.transitionError()
 	}
-	if strings.TrimSpace(referenceID) == "" {
-		return fmt.Errorf("%w: resolved reference id is required", ErrInvalidTransaction)
+	if tx.kind != TransactionWin && tx.kind != TransactionRefund && tx.kind != TransactionRollback {
+		return fmt.Errorf("%w: %s cannot have a transaction reference", ErrInvalidTransaction, tx.kind)
+	}
+	if strings.TrimSpace(tx.referenceExternalID) == "" || tx.referenceExternalID != reference.externalTransactionID {
+		return fmt.Errorf("%w: external reference does not match the transaction", ErrInvalidTransaction)
+	}
+	if tx.id == reference.id {
+		return fmt.Errorf("%w: transaction cannot reference itself", ErrInvalidTransaction)
+	}
+	if reference.status != TransactionProcessed {
+		return fmt.Errorf("%w: referenced transaction is not processed", ErrInvalidTransaction)
+	}
+	if tx.providerID != reference.providerID || tx.playerID != reference.playerID || tx.walletID != reference.walletID || tx.roundID != reference.roundID {
+		return fmt.Errorf("%w: reference must match provider, player, wallet, and round", ErrInvalidTransaction)
+	}
+	if tx.referenceID != "" && tx.referenceID != reference.id {
+		return fmt.Errorf("%w: transaction already points to another reference", ErrInvalidTransaction)
+	}
+
+	switch tx.kind {
+	case TransactionWin, TransactionRefund:
+		if reference.kind != TransactionBet {
+			return fmt.Errorf("%w: %s must reference a processed BET", ErrInvalidTransaction, tx.kind)
+		}
+	case TransactionRollback:
+		if reference.kind != TransactionBet && reference.kind != TransactionWin && reference.kind != TransactionRefund {
+			return fmt.Errorf("%w: ROLLBACK must reference a processed BET, WIN, or REFUND", ErrInvalidTransaction)
+		}
+	}
+
+	comparison, err := tx.money.Compare(reference.money)
+	if err != nil {
+		return fmt.Errorf("%w: reference currency differs from operation", ErrInvalidTransaction)
+	}
+	if tx.kind != TransactionWin && comparison != 0 {
+		return fmt.Errorf("%w: reversal amount must equal the referenced operation", ErrInvalidTransaction)
+	}
+	return nil
+}
+
+// ResolveReference valida e registra a referência interna, devolvendo a operação
+// para PENDING caso estivesse aguardando a chegada da transação referenciada.
+func (tx *WagerTransaction) ResolveReference(reference WagerTransaction, now time.Time) error {
+	if tx.status != TransactionPending && tx.status != TransactionPendingReference {
+		return tx.transitionError()
+	}
+	if tx.referenceID != "" {
+		return fmt.Errorf("%w: reference is already resolved", ErrInvalidTransaction)
+	}
+	if err := tx.ValidateReference(reference); err != nil {
+		return err
 	}
 	if err := tx.validateUpdateTime(now); err != nil {
 		return err
 	}
-	tx.referenceID = referenceID
+	tx.referenceID = reference.id
 	tx.status = TransactionPending
 	tx.updatedAt = now
 	return nil
+}
+
+// Movement determina a alteração no saldo produzida pela operação.
+// LOSS é processada sem lançar débito ou crédito.
+func (tx WagerTransaction) Movement(reference *WagerTransaction) (LedgerDirection, Money, bool, error) {
+	if tx.status != TransactionPending {
+		return "", Money{}, false, tx.transitionError()
+	}
+
+	switch tx.kind {
+	case TransactionOpening, TransactionWin:
+		if tx.referenceExternalID != "" {
+			if reference == nil {
+				return "", Money{}, false, fmt.Errorf("%w: referenced transaction is required", ErrInvalidTransaction)
+			}
+			if err := tx.ValidateReference(*reference); err != nil {
+				return "", Money{}, false, err
+			}
+		}
+		return LedgerCredit, tx.money, true, nil
+	case TransactionBet:
+		return LedgerDebit, tx.money, true, nil
+	case TransactionLoss:
+		return "", tx.money, false, nil
+	case TransactionRefund:
+		if reference == nil {
+			return "", Money{}, false, fmt.Errorf("%w: referenced transaction is required", ErrInvalidTransaction)
+		}
+		if err := tx.ValidateReference(*reference); err != nil {
+			return "", Money{}, false, err
+		}
+		return LedgerCredit, tx.money, true, nil
+	case TransactionRollback:
+		if reference == nil {
+			return "", Money{}, false, fmt.Errorf("%w: referenced transaction is required", ErrInvalidTransaction)
+		}
+		if err := tx.ValidateReference(*reference); err != nil {
+			return "", Money{}, false, err
+		}
+		if reference.kind == TransactionBet {
+			return LedgerCredit, tx.money, true, nil
+		}
+		return LedgerDebit, tx.money, true, nil
+	default:
+		return "", Money{}, false, fmt.Errorf("%w: unknown kind %q", ErrInvalidTransaction, tx.kind)
+	}
 }
 
 // MarkProcessed finaliza a operação e guarda o saldo observado no processamento.
@@ -324,8 +419,11 @@ func (tx WagerTransaction) validate() error {
 		if strings.TrimSpace(tx.providerID) == "" || strings.TrimSpace(tx.externalTransactionID) == "" || strings.TrimSpace(tx.idempotencyKey) == "" || !tx.hasPayloadHash || strings.TrimSpace(tx.roundID) == "" || strings.TrimSpace(tx.gameID) == "" {
 			return fmt.Errorf("%w: external transaction metadata is incomplete", ErrInvalidTransaction)
 		}
-		if (tx.kind == TransactionRefund || tx.kind == TransactionRollback) != (strings.TrimSpace(tx.referenceExternalID) != "") {
-			return fmt.Errorf("%w: reference external id is required only for reversals", ErrInvalidTransaction)
+		hasReference := strings.TrimSpace(tx.referenceExternalID) != ""
+		requiresReference := tx.kind == TransactionRefund || tx.kind == TransactionRollback
+		allowsReference := requiresReference || tx.kind == TransactionWin
+		if requiresReference && !hasReference || !allowsReference && hasReference {
+			return fmt.Errorf("%w: reference external id is missing or not allowed for %s", ErrInvalidTransaction, tx.kind)
 		}
 		if tx.referenceID != "" && tx.kind != TransactionRefund && tx.kind != TransactionRollback && tx.kind != TransactionWin {
 			return fmt.Errorf("%w: this operation kind cannot resolve a reference", ErrInvalidTransaction)

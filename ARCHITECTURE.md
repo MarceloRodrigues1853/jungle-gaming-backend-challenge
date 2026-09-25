@@ -46,6 +46,21 @@ ir para `PENDING_REFERENCE`; ao resolver, volta a `PENDING` com o ID interno gua
 transação processada para permitir replay do resultado original, sem recalcular a
 operação.
 
+Uma referência só é aceita se apontar para uma transação `PROCESSED` do mesmo provedor,
+jogador, carteira e rodada. `WIN` pode referenciar uma `BET` sem exigir valores iguais;
+`REFUND` só pode referenciar uma `BET` e devolve seu valor integral; `ROLLBACK` pode
+referenciar `BET`, `WIN` ou `REFUND` e inverte o movimento dessa transação. `BET` debita,
+`WIN` e `REFUND` creditam, `LOSS` não movimenta saldo; `ROLLBACK` credita uma `BET`
+revertida e debita um `WIN` ou `REFUND` revertido.
+
+Política para evitar dupla devolução: uma transação pode ter no máximo uma reversão
+bem-sucedida no total. Portanto, uma `BET` processada pode receber `REFUND` ou
+`ROLLBACK`, mas não ambos. É permitido reverter uma `REFUND` com `ROLLBACK`; nesse caso,
+a aposta continua marcada como já estornada pelo `REFUND`, impedindo uma segunda
+reversão direta da `BET`. O domínio valida o tipo e o vínculo da referência; a migration
+002 reforça a exclusividade no PostgreSQL. A tradução de conflitos de unicidade em um
+código estável de rejeição será feita pelo caso de uso da aplicação.
+
 `NewExternalTransaction` recebe um hash de 32 bytes já calculado. A canonicalização
 do payload e o algoritmo/campos exatos do hash serão definidos no caso de uso comum
 de HTTP e SQS, ainda não implementado.
@@ -54,8 +69,8 @@ de HTTP e SQS, ainda não implementado.
 
 Ainda não estão implementados os adaptadores e garantias de execução: transações SQL
 e coordenação por carteira, idempotência persistente, referência pendente com retry e
-expiração, resolução de conflitos de reversão, inbox/outbox, autenticação e isolamento
-por provedor, composição e lifecycle com Uber Fx, API HTTP, consumidor SQS, métricas,
-logs estruturados, Docker Compose e testes de integração com serviços reais. As
-estratégias para esses pontos serão documentadas junto com cada etapa, antes de serem
-apresentadas como garantias da solução.
+expiração, mapeamento dos conflitos de reversão para códigos de rejeição, inbox/outbox,
+autenticação e isolamento por provedor, composição e lifecycle com Uber Fx, API HTTP,
+consumidor SQS, métricas, logs estruturados, Docker Compose e testes de integração com
+serviços reais. As estratégias para esses pontos serão documentadas junto com cada
+etapa, antes de serem apresentadas como garantias da solução.

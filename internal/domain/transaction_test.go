@@ -30,6 +30,34 @@ func transactionInput(kind TransactionKind, amount string) ExternalTransactionIn
 	}
 }
 
+// processedTransaction cria uma operação concluída para ser usada como referência.
+func processedTransaction(t *testing.T, kind TransactionKind, amount, externalID string) WagerTransaction {
+	t.Helper()
+	input := transactionInput(kind, amount)
+	input.ID = "tx-" + externalID
+	input.ExternalTransactionID = externalID
+	if kind == TransactionRefund || kind == TransactionRollback {
+		input.ReferenceExternalID = "external-prior"
+	}
+	tx, err := NewExternalTransaction(input)
+	if err != nil {
+		t.Fatalf("NewExternalTransaction() error = %v", err)
+	}
+	processedAt := input.Now.Add(time.Second)
+	if kind == TransactionRefund || kind == TransactionRollback {
+		original := processedTransaction(t, TransactionBet, amount, "external-prior")
+		if err := tx.ResolveReference(original, processedAt); err != nil {
+			t.Fatalf("ResolveReference() error = %v", err)
+		}
+		processedAt = processedAt.Add(time.Second)
+	}
+	balance, _ := ParseMoney("100.00", "BRL")
+	if err := tx.MarkProcessed(balance, processedAt); err != nil {
+		t.Fatalf("MarkProcessed() error = %v", err)
+	}
+	return tx
+}
+
 // TestNewExternalTransactionAmountRules verifica as regras de valor de cada tipo externo.
 // A tabela cobre operações positivas, LOSS zerado e tipos que não podem vir de um provedor.
 func TestNewExternalTransactionAmountRules(t *testing.T) {
@@ -166,10 +194,11 @@ func TestWagerTransactionTransitionsAndTerminalState(t *testing.T) {
 	}
 	resolvedAt := pendingAt.Add(time.Second)
 	// Ao localizar a operação original, guardar seu ID interno antes de processar a reversão.
-	if err := tx.ResolveReference("tx-original", resolvedAt); err != nil {
+	reference := processedTransaction(t, TransactionBet, "10.00", "external-original")
+	if err := tx.ResolveReference(reference, resolvedAt); err != nil {
 		t.Fatalf("ResolveReference() error = %v", err)
 	}
-	if tx.Status() != TransactionPending || tx.ReferenceID() != "tx-original" {
+	if tx.Status() != TransactionPending || tx.ReferenceID() != reference.ID() {
 		t.Fatalf("resolved state = %s/%q", tx.Status(), tx.ReferenceID())
 	}
 	processedAt := resolvedAt.Add(time.Second)
@@ -307,7 +336,8 @@ func TestResolvedReferenceSurvivesRehydration(t *testing.T) {
 	if err := tx.MarkPendingReference(now); err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.ResolveReference("internal-original", now.Add(time.Second)); err != nil {
+	reference := processedTransaction(t, TransactionRefund, "10.00", "external-original")
+	if err := tx.ResolveReference(reference, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -315,7 +345,165 @@ func TestResolvedReferenceSurvivesRehydration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rehydrated.ReferenceID() != "internal-original" || rehydrated.Status() != TransactionPending {
+	if rehydrated.ReferenceID() != reference.ID() || rehydrated.Status() != TransactionPending {
 		t.Fatalf("rehydrated reference state = %s/%q", rehydrated.Status(), rehydrated.ReferenceID())
+	}
+}
+
+// TestReferenceCompatibilityAndWalletMovement verifica os tipos de referência
+// permitidos e a direção financeira resultante de cada operação.
+func TestReferenceCompatibilityAndWalletMovement(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		kind            TransactionKind
+		amount          string
+		referenceKind   TransactionKind
+		referenceAmount string
+		wantDirection   LedgerDirection
+		wantHasMovement bool
+	}{
+		{name: "refund bet credits", kind: TransactionRefund, amount: "25.00", referenceKind: TransactionBet, referenceAmount: "25.00", wantDirection: LedgerCredit, wantHasMovement: true},
+		{name: "rollback bet credits", kind: TransactionRollback, amount: "25.00", referenceKind: TransactionBet, referenceAmount: "25.00", wantDirection: LedgerCredit, wantHasMovement: true},
+		{name: "rollback win debits", kind: TransactionRollback, amount: "25.00", referenceKind: TransactionWin, referenceAmount: "25.00", wantDirection: LedgerDebit, wantHasMovement: true},
+		{name: "rollback refund debits", kind: TransactionRollback, amount: "25.00", referenceKind: TransactionRefund, referenceAmount: "25.00", wantDirection: LedgerDebit, wantHasMovement: true},
+		{name: "win may reference bet with different value", kind: TransactionWin, amount: "10.00", referenceKind: TransactionBet, referenceAmount: "25.00", wantDirection: LedgerCredit, wantHasMovement: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			input := transactionInput(tc.kind, tc.amount)
+			input.ID = "tx-current"
+			input.ExternalTransactionID = "external-current"
+			input.ReferenceExternalID = "external-original"
+			tx, err := NewExternalTransaction(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reference := processedTransaction(t, tc.referenceKind, tc.referenceAmount, "external-original")
+
+			if err := tx.ValidateReference(reference); err != nil {
+				t.Fatalf("ValidateReference() error = %v", err)
+			}
+			direction, money, hasMovement, err := tx.Movement(&reference)
+			if err != nil {
+				t.Fatalf("Movement() error = %v", err)
+			}
+			if direction != tc.wantDirection || hasMovement != tc.wantHasMovement || money.String() != tc.amount {
+				t.Fatalf("Movement() = %s %s %v, want %s %s %v", direction, money.String(), hasMovement, tc.wantDirection, tc.amount, tc.wantHasMovement)
+			}
+		})
+	}
+}
+
+// TestReferenceRulesRejectIncompatibleTransactions garante que só operações
+// processadas e coerentes com a identidade/rodada original possam ser referenciadas.
+func TestReferenceRulesRejectIncompatibleTransactions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		referenceKind   TransactionKind
+		referenceAmount string
+		mutateInput     func(*ExternalTransactionInput)
+		mutateReference func(*WagerTransaction)
+	}{
+		{name: "refund cannot reference win", referenceKind: TransactionWin, referenceAmount: "25.00"},
+		{name: "rollback cannot reference loss", referenceKind: TransactionLoss, referenceAmount: "0.00"},
+		{name: "provider mismatch", referenceKind: TransactionBet, referenceAmount: "25.00", mutateReference: func(ref *WagerTransaction) { ref.providerID = "provider-b" }},
+		{name: "player mismatch", referenceKind: TransactionBet, referenceAmount: "25.00", mutateReference: func(ref *WagerTransaction) { ref.playerID = "player-b" }},
+		{name: "wallet mismatch", referenceKind: TransactionBet, referenceAmount: "25.00", mutateReference: func(ref *WagerTransaction) { ref.walletID = "wallet-b" }},
+		{name: "round mismatch", referenceKind: TransactionBet, referenceAmount: "25.00", mutateReference: func(ref *WagerTransaction) { ref.roundID = "round-b" }},
+		{name: "external id mismatch", referenceKind: TransactionBet, referenceAmount: "25.00", mutateInput: func(in *ExternalTransactionInput) { in.ReferenceExternalID = "different-external-id" }},
+		{name: "self reference", referenceKind: TransactionBet, referenceAmount: "25.00", mutateInput: func(in *ExternalTransactionInput) { in.ID = "tx-external-original" }},
+		{name: "reversal amount mismatch", referenceKind: TransactionBet, referenceAmount: "25.00", mutateInput: func(in *ExternalTransactionInput) { in.Money, _ = ParseMoney("20.00", "BRL") }},
+		{name: "currency mismatch", referenceKind: TransactionBet, referenceAmount: "25.00", mutateReference: func(ref *WagerTransaction) { ref.money, _ = ParseMoney("25.00", "USD") }},
+		{name: "reference is not processed", referenceKind: TransactionBet, referenceAmount: "25.00", mutateReference: func(ref *WagerTransaction) { ref.status = TransactionPending }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			input := transactionInput(TransactionRefund, "25.00")
+			input.ID = "tx-current"
+			input.ExternalTransactionID = "external-current"
+			input.ReferenceExternalID = "external-original"
+			if tc.mutateInput != nil {
+				tc.mutateInput(&input)
+			}
+			candidate, err := NewExternalTransaction(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reference := processedTransaction(t, tc.referenceKind, tc.referenceAmount, "external-original")
+			if tc.mutateReference != nil {
+				tc.mutateReference(&reference)
+			}
+			if err := candidate.ValidateReference(reference); !errors.Is(err, ErrInvalidTransaction) {
+				t.Fatalf("ValidateReference() error = %v, want invalid transaction", err)
+			}
+		})
+	}
+}
+
+// TestMovementRequiresResolvedReference impede uma reversão em PENDING_REFERENCE
+// de produzir efeito financeiro antes de registrar o ID interno da operação original.
+func TestMovementRequiresResolvedReference(t *testing.T) {
+	t.Parallel()
+
+	input := transactionInput(TransactionRefund, "25.00")
+	input.ReferenceExternalID = "external-original"
+	tx, err := NewExternalTransaction(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.MarkPendingReference(input.Now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	reference := processedTransaction(t, TransactionBet, "25.00", "external-original")
+	if _, _, _, err := tx.Movement(&reference); !errors.Is(err, ErrInvalidTransaction) {
+		t.Fatalf("Movement() while reference is pending error = %v, want invalid transaction", err)
+	}
+	if err := tx.ResolveReference(reference, input.Now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if direction, _, hasMovement, err := tx.Movement(&reference); err != nil || direction != LedgerCredit || !hasMovement {
+		t.Fatalf("Movement() after resolution = %s, %v, %v", direction, hasMovement, err)
+	}
+}
+
+// TestMovementWithoutReferenceCoversSimpleOperations verifica BET, WIN sem referência
+// e LOSS, que não deve criar lançamento nem alterar a carteira.
+func TestMovementWithoutReferenceCoversSimpleOperations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		kind          TransactionKind
+		amount        string
+		wantDirection LedgerDirection
+		wantMovement  bool
+	}{
+		{kind: TransactionBet, amount: "10.00", wantDirection: LedgerDebit, wantMovement: true},
+		{kind: TransactionWin, amount: "10.00", wantDirection: LedgerCredit, wantMovement: true},
+		{kind: TransactionLoss, amount: "0.00", wantMovement: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			t.Parallel()
+			tx, err := NewExternalTransaction(transactionInput(tc.kind, tc.amount))
+			if err != nil {
+				t.Fatal(err)
+			}
+			direction, money, hasMovement, err := tx.Movement(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if direction != tc.wantDirection || hasMovement != tc.wantMovement || money.String() != tc.amount {
+				t.Fatalf("Movement() = %s %s %v", direction, money.String(), hasMovement)
+			}
+		})
 	}
 }
