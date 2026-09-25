@@ -109,7 +109,8 @@ adicionado antes de expor os fluxos HTTP/SQS.
 Ainda estão pendentes a canonicalização comum do payload entre HTTP/SQS, retomada de
 referências pendentes com retry e expiração, mapeamento de conflitos de reversão para
 códigos de rejeição, inbox/outbox, autenticação e isolamento por provedor, composição
-e lifecycle com Uber Fx, API HTTP, consumidor SQS, métricas, logs estruturados, Docker
-Compose e testes de integração/concorrência com serviços reais. As estratégias para
-esses pontos serão documentadas junto com cada etapa, antes de serem apresentadas como
-garantias da solução.
+e lifecycle com Uber Fx, API HTTP, consumidor SQS, métricas, logs estruturados, Dockerfile
+e testes de concorrência distribuída com pelo menos três processos independentes. Os
+testes PostgreSQL locais já cobrem replay e operações simultâneas, mas não substituem
+esse cenário multi-processo. As estratégias para esses pontos serão documentadas junto
+com cada etapa, antes de serem apresentadas como garantias da solução.

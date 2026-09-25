@@ -6,7 +6,47 @@ permite apenas uma reversão bem-sucedida por transação referenciada. O valor 
 é persistido em unidades mínimas (`BIGINT`), compatível com
 `domain.Money.MinorUnits()`; nenhuma coluna usa ponto flutuante.
 
-Com PostgreSQL disponível e `psql` instalado, aplique a partir da raiz do projeto:
+Inicie o PostgreSQL local pela raiz do projeto:
+
+```sh
+docker compose up -d postgres
+docker compose ps
+```
+
+O serviço publica a porta somente em `127.0.0.1:5432`, persiste os dados no volume
+`postgres_data` e usa uma senha de desenvolvimento local (`local_dev_only`) quando
+`POSTGRES_PASSWORD` não é definida. Sobrescreva-a no ambiente antes de subir o serviço
+se preferir outra credencial. Para parar sem apagar os dados, use
+`docker compose down`; não use `docker compose down -v` a menos que queira remover o
+volume e todos os dados locais.
+
+As migrations também podem ser aplicadas sem instalar `psql` no host, usando o cliente
+que vem no container:
+
+```sh
+docker compose exec -T postgres psql -U jungle_app -d jungle_gaming -v ON_ERROR_STOP=1 < migrations/001_financial_core.up.sql
+docker compose exec -T postgres psql -U jungle_app -d jungle_gaming -v ON_ERROR_STOP=1 < migrations/002_reversal_exclusivity.up.sql
+```
+
+Com as migrations aplicadas, execute os testes de integração contra esse banco. No
+PowerShell:
+
+```powershell
+$env:JUNGLE_TEST_DATABASE_URL = "postgres://jungle_app:local_dev_only@127.0.0.1:5432/jungle_gaming?sslmode=disable"
+go test ./...
+```
+
+No Git Bash:
+
+```sh
+JUNGLE_TEST_DATABASE_URL="postgres://jungle_app:local_dev_only@127.0.0.1:5432/jungle_gaming?sslmode=disable" go test ./...
+```
+
+Os testes criam carteiras e transações com IDs exclusivos; esses registros permanecem
+no volume local e não são apagados, preservando a regra append-only do ledger.
+
+Se usar credenciais sobrescritas, ajuste usuário e banco nos comandos acima. Com
+PostgreSQL e `psql` instalados localmente, as alternativas a seguir também funcionam:
 
 ```powershell
 psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_financial_core.up.sql
