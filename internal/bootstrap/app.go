@@ -27,9 +27,12 @@ func NewApp() *fx.App {
 			newIntrospector,
 			newWagerService,
 			newWalletService,
+			newSQSClient,
+			newOutboxPublisher,
+			newOutboxWorker,
 			newHTTPHandler,
 		),
-		fx.Invoke(registerHTTPServer),
+		fx.Invoke(registerHTTPServer, registerOutboxWorker),
 	)
 }
 

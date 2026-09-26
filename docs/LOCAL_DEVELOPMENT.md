@@ -3,13 +3,13 @@
 ## Dependências
 
 - Go na versão declarada em `go.mod`;
-- Docker Desktop com os serviços `postgres` e `keycloak` ativos;
-- migrations 001, 002 e 003 aplicadas conforme `migrations/README.md`.
+- Docker Desktop com os serviços `postgres`, `keycloak` e `localstack` ativos;
+- migrations 001, 002, 003 e 004 aplicadas conforme `migrations/README.md`.
 
 Inicie a infraestrutura:
 
 ```sh
-docker compose up -d postgres keycloak
+docker compose up -d postgres keycloak localstack
 docker compose ps
 ```
 
@@ -23,7 +23,13 @@ Por padrão, a aplicação usa `127.0.0.1:8090`, PostgreSQL e Keycloak locais. E
 valores são apenas conveniências de desenvolvimento. Podem ser substituídos pelas
 variáveis `HTTP_ADDRESS`, `DATABASE_URL`, `OIDC_INTROSPECTION_URL`,
 `OIDC_INTROSPECTION_CLIENT_ID`, `OIDC_INTROSPECTION_CLIENT_SECRET`,
-`PROVIDER_CLIENT_ID` e `PROVIDER_ID`.
+`PROVIDER_CLIENT_ID`, `PROVIDER_ID`, `AWS_REGION`, `SQS_ENDPOINT`,
+`SQS_OUTPUT_QUEUE_URL`, `OUTBOX_POLL_INTERVAL`, `OUTBOX_LOCK_DURATION` e
+`OUTBOX_BATCH_SIZE`.
+
+O LocalStack provisiona `jungle-events.fifo` para eventos de saída e também prepara
+`wager-transactions.fifo` e sua DLQ para a próxima etapa do consumidor. O publicador
+usa `eventId` como `MessageDeduplicationId` e `aggregateId` como `MessageGroupId`.
 
 O cliente `wallet-internal`, reservado às operações administrativas de carteira, usa
 o segredo local `wallet-internal-local-secret`. Tokens desse cliente não

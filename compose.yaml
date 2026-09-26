@@ -27,5 +27,23 @@ services:
     volumes:
       - ./keycloak:/opt/keycloak/data/import:ro
 
+  localstack:
+    image: localstack/localstack:4.9.2
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+    ports:
+      - "127.0.0.1:4566:4566"
+    volumes:
+      - ./localstack/init:/etc/localstack/init/ready.d:ro
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal sqs get-queue-url --queue-name jungle-events.fifo >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
 volumes:
   postgres_data:
+  localstack_data:
