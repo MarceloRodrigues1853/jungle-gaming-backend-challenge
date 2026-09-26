@@ -25,6 +25,10 @@ variáveis `HTTP_ADDRESS`, `DATABASE_URL`, `OIDC_INTROSPECTION_URL`,
 `OIDC_INTROSPECTION_CLIENT_ID`, `OIDC_INTROSPECTION_CLIENT_SECRET`,
 `PROVIDER_CLIENT_ID` e `PROVIDER_ID`.
 
+O cliente `wallet-internal`, reservado às futuras operações administrativas de
+carteira, usa o segredo local `wallet-internal-local-secret`. Tokens desse cliente não
+são aceitos no endpoint de apostas, e tokens de `provider-a` não concedem papel interno.
+
 ## Health checks
 
 ```http

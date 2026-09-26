@@ -15,6 +15,7 @@ type Config struct {
 	IntrospectionSecret string
 	ProviderClientID    string
 	ProviderID          string
+	InternalClientID    string
 }
 
 // LoadConfig lê o ambiente com padrões restritos ao desenvolvimento local.
@@ -27,11 +28,12 @@ func LoadConfig() (Config, error) {
 		IntrospectionSecret: environmentOrDefault("OIDC_INTROSPECTION_CLIENT_SECRET", "jungle-api-introspection-secret"),
 		ProviderClientID:    environmentOrDefault("PROVIDER_CLIENT_ID", "provider-a"),
 		ProviderID:          environmentOrDefault("PROVIDER_ID", "provider-a"),
+		InternalClientID:    environmentOrDefault("INTERNAL_CLIENT_ID", "wallet-internal"),
 	}
 	if strings.TrimSpace(config.HTTPAddress) == "" || strings.TrimSpace(config.DatabaseURL) == "" ||
 		strings.TrimSpace(config.IntrospectionURL) == "" || strings.TrimSpace(config.IntrospectionClient) == "" ||
 		strings.TrimSpace(config.IntrospectionSecret) == "" || strings.TrimSpace(config.ProviderClientID) == "" ||
-		strings.TrimSpace(config.ProviderID) == "" {
+		strings.TrimSpace(config.ProviderID) == "" || strings.TrimSpace(config.InternalClientID) == "" {
 		return Config{}, errors.New("application configuration contains empty values")
 	}
 	return config, nil

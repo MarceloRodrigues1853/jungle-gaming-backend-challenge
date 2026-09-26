@@ -26,7 +26,9 @@ O Keycloak local fica disponível em `http://localhost:8080`, com realm importad
 `jungle-dev`, usuário administrativo `admin` e senha `local_admin_only`. O cliente
 `provider-a` usa `provider-a-local-secret` para obter tokens de teste; `jungle-api`
 usa `jungle-api-introspection-secret` para introspecção. Esses valores são públicos e
-inseguros por projeto: use-os somente no ambiente local de desenvolvimento.
+inseguros por projeto. O cliente interno `wallet-internal` usa
+`wallet-internal-local-secret` e será reservado às operações administrativas de
+carteira. Use todas essas credenciais somente no ambiente local de desenvolvimento.
 
 As migrations também podem ser aplicadas sem instalar `psql` no host, usando o cliente
 que vem no container:

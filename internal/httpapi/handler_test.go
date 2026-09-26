@@ -22,7 +22,7 @@ func TestSubmitWagerUsesAuthenticatedProvider(t *testing.T) {
 		TransactionID: "transaction-internal", Status: domain.TransactionProcessed,
 		Balance: balance, HasBalance: true,
 	}}
-	handler := testHandler(t, &authenticatorStub{principal: auth.Principal{ProviderID: "provider-a"}}, submitter)
+	handler := testHandler(t, &authenticatorStub{principal: auth.Principal{Role: auth.RoleProvider, ProviderID: "provider-a"}}, submitter)
 	response := performWagerRequest(handler, "Bearer valid-token", "provider-a:external-1", validRequestBody("provider-a"))
 
 	if response.Code != http.StatusCreated {
@@ -41,7 +41,7 @@ func TestSubmitWagerRejectsProviderMismatch(t *testing.T) {
 	t.Parallel()
 
 	submitter := &submitterSpy{}
-	handler := testHandler(t, &authenticatorStub{principal: auth.Principal{ProviderID: "provider-a"}}, submitter)
+	handler := testHandler(t, &authenticatorStub{principal: auth.Principal{Role: auth.RoleProvider, ProviderID: "provider-a"}}, submitter)
 	response := performWagerRequest(handler, "Bearer valid-token", "key-1", validRequestBody("provider-b"))
 	if response.Code != http.StatusForbidden || submitter.called {
 		t.Fatalf("status/called = %d/%v, body = %s", response.Code, submitter.called, response.Body.String())
@@ -94,7 +94,7 @@ func TestSubmitWagerMapsReplayAndKnownErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			handler := testHandler(t, &authenticatorStub{principal: auth.Principal{ProviderID: "provider-a"}}, &submitterSpy{result: test.result, err: test.err})
+			handler := testHandler(t, &authenticatorStub{principal: auth.Principal{Role: auth.RoleProvider, ProviderID: "provider-a"}}, &submitterSpy{result: test.result, err: test.err})
 			response := performWagerRequest(handler, "Bearer token", "key-1", validRequestBody("provider-a"))
 			if response.Code != test.status {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
@@ -110,7 +110,7 @@ func TestSubmitWagerMapsReplayAndKnownErrors(t *testing.T) {
 func TestSubmitWagerRejectsAmbiguousJSON(t *testing.T) {
 	t.Parallel()
 
-	handler := testHandler(t, &authenticatorStub{principal: auth.Principal{ProviderID: "provider-a"}}, &submitterSpy{})
+	handler := testHandler(t, &authenticatorStub{principal: auth.Principal{Role: auth.RoleProvider, ProviderID: "provider-a"}}, &submitterSpy{})
 	bodies := []string{
 		strings.TrimSuffix(validRequestBody("provider-a"), "}") + `,"unexpected":true}`,
 		validRequestBody("provider-a") + `{}`,

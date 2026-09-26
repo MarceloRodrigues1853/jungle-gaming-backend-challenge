@@ -131,14 +131,17 @@ O ambiente local usa Keycloak em modo de desenvolvimento, com o realm `jungle-de
 clientes de serviço para obter e introspectar tokens via `client_credentials`. O pacote
 `internal/auth` consulta o endpoint de introspecção com credenciais de cliente
 confidencial, aceita apenas tokens ativos e mapeia `client_id` por uma allowlist
-explícita para o `providerId` interno. Assim, o provedor não deve ser confiado a partir
-do corpo HTTP. As credenciais do realm importado são apenas de desenvolvimento local.
+explícita para um papel. `provider-a` recebe o papel `PROVIDER` e seu `providerId`;
+`wallet-internal` recebe `INTERNAL` sem poder representar um provedor. Assim, a origem
+autenticada determina tanto o escopo quanto o tipo de operação autorizado. As
+credenciais do realm importado são apenas de desenvolvimento local.
 
 O adaptador `internal/httpapi` protege `POST /wagering/transactions` com Bearer token,
 introspecta a credencial e injeta o principal validado no contexto. O `providerId` do
 JSON precisa coincidir com esse principal antes de o caso de uso ser chamado; ele nunca
-é aceito isoladamente como prova de identidade. Operações internas de carteira ainda
-precisarão de uma permissão/client separado.
+é aceito isoladamente como prova de identidade. Um token interno é recusado nessa rota,
+mesmo sendo válido. As futuras rotas administrativas de carteira exigirão o papel
+`INTERNAL`, impedindo que tokens de provedores sejam reutilizados para essa finalidade.
 
 ### Contrato HTTP de operações
 

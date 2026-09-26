@@ -131,6 +131,10 @@ func (handler *Handler) requireProvider(next http.Handler) http.Handler {
 			}
 			return
 		}
+		if principal.Role != auth.RoleProvider {
+			writeError(writer, http.StatusForbidden, "PROVIDER_ROLE_REQUIRED", "a provider service identity is required")
+			return
+		}
 		next.ServeHTTP(writer, request.WithContext(withProviderPrincipal(request.Context(), principal)))
 	})
 }

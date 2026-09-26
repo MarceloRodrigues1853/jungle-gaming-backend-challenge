@@ -70,7 +70,10 @@ func newIntrospector(config Config) (*auth.Introspector, error) {
 		config.IntrospectionURL,
 		config.IntrospectionClient,
 		config.IntrospectionSecret,
-		map[string]string{config.ProviderClientID: config.ProviderID},
+		map[string]auth.ClientIdentity{
+			config.ProviderClientID: {Role: auth.RoleProvider, ProviderID: config.ProviderID},
+			config.InternalClientID: {Role: auth.RoleInternal},
+		},
 		nil,
 	)
 }

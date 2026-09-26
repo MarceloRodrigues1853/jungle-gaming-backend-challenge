@@ -22,8 +22,25 @@ var (
 	ErrIntrospectionUnavailable = errors.New("token introspection unavailable")
 )
 
+// ClientRole separa provedores externos de serviços internos autorizados.
+type ClientRole string
+
+const (
+	// RoleProvider permite enviar operações somente para o próprio providerId.
+	RoleProvider ClientRole = "PROVIDER"
+	// RoleInternal permite executar operações administrativas, como abrir carteiras.
+	RoleInternal ClientRole = "INTERNAL"
+)
+
+// ClientIdentity define a autorização esperada para um client_id do IdP.
+type ClientIdentity struct {
+	Role       ClientRole
+	ProviderID string
+}
+
 // Principal representa a identidade do provedor obtida do token validado.
 type Principal struct {
+	Role       ClientRole
 	ProviderID string
 	ClientID   string
 	Subject    string
@@ -34,12 +51,12 @@ type Introspector struct {
 	endpoint           string
 	clientID           string
 	clientSecret       string
-	providerByClientID map[string]string
+	identityByClientID map[string]ClientIdentity
 	httpClient         *http.Client
 }
 
 // NewIntrospector configura um cliente confidencial e uma allowlist explícita de provedores.
-func NewIntrospector(endpoint, clientID, clientSecret string, providerByClientID map[string]string, httpClient *http.Client) (*Introspector, error) {
+func NewIntrospector(endpoint, clientID, clientSecret string, identityByClientID map[string]ClientIdentity, httpClient *http.Client) (*Introspector, error) {
 	parsedEndpoint, err := url.ParseRequestURI(endpoint)
 	if err != nil || (parsedEndpoint.Scheme != "http" && parsedEndpoint.Scheme != "https") || parsedEndpoint.Host == "" {
 		return nil, errors.New("introspection endpoint must be an absolute HTTP URL")
@@ -47,22 +64,28 @@ func NewIntrospector(endpoint, clientID, clientSecret string, providerByClientID
 	if strings.TrimSpace(clientID) == "" || strings.TrimSpace(clientSecret) == "" {
 		return nil, errors.New("introspection client credentials are required")
 	}
-	if len(providerByClientID) == 0 {
-		return nil, errors.New("at least one provider client must be authorized")
+	if len(identityByClientID) == 0 {
+		return nil, errors.New("at least one client identity must be authorized")
 	}
-	providers := make(map[string]string, len(providerByClientID))
-	for key, value := range providerByClientID {
-		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
-			return nil, errors.New("provider client and provider ids must not be empty")
+	identities := make(map[string]ClientIdentity, len(identityByClientID))
+	for key, identity := range identityByClientID {
+		if strings.TrimSpace(key) == "" || (identity.Role != RoleProvider && identity.Role != RoleInternal) {
+			return nil, errors.New("client id and role must be valid")
 		}
-		providers[key] = value
+		if identity.Role == RoleProvider && strings.TrimSpace(identity.ProviderID) == "" {
+			return nil, errors.New("provider identity requires provider id")
+		}
+		if identity.Role == RoleInternal && strings.TrimSpace(identity.ProviderID) != "" {
+			return nil, errors.New("internal identity must not impersonate a provider")
+		}
+		identities[key] = identity
 	}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 5 * time.Second}
 	}
 	return &Introspector{
 		endpoint: endpoint, clientID: clientID, clientSecret: clientSecret,
-		providerByClientID: providers, httpClient: httpClient,
+		identityByClientID: identities, httpClient: httpClient,
 	}, nil
 }
 
@@ -101,11 +124,11 @@ func (introspector *Introspector) Authenticate(ctx context.Context, accessToken 
 	if !claims.Active {
 		return Principal{}, ErrInvalidToken
 	}
-	providerID, authorized := introspector.providerByClientID[claims.ClientID]
+	identity, authorized := introspector.identityByClientID[claims.ClientID]
 	if !authorized {
 		return Principal{}, ErrUnauthorizedProvider
 	}
-	return Principal{ProviderID: providerID, ClientID: claims.ClientID, Subject: claims.Subject}, nil
+	return Principal{Role: identity.Role, ProviderID: identity.ProviderID, ClientID: claims.ClientID, Subject: claims.Subject}, nil
 }
 
 // introspectionClaims lê apenas os campos necessários para autenticar e autorizar um provedor.
