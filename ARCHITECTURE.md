@@ -98,8 +98,23 @@ do mesmo provedor pela chave ou pelo ID externo e só devolve o resultado anteri
 ambas as identidades e o hash do payload coincidem. Qualquer divergência resulta em
 `ErrIdempotencyConflict`, sem nova movimentação. O saldo de replay vem de
 `result_balance_minor`, não do saldo atual da carteira. O cálculo/canonicalização do
-hash ainda pertence ao caso de uso comum de HTTP e SQS, que deve produzir os mesmos 32
-bytes para o mesmo conteúdo de negócio.
+hash pertence ao caso de uso comum de HTTP e SQS em `internal/application`.
+
+### Entrada comum e hash canônico
+
+`application.WagerService` recebe o `providerId` da identidade autenticada e a chave de
+idempotência do transporte, valida a representação textual de dinheiro e constrói a
+mesma entidade para entradas HTTP ou SQS. Identificadores com espaços nas extremidades
+são rejeitados em vez de normalizados silenciosamente; valores monetários exigem a
+forma decimal exata já definida por `domain.ParseMoney`.
+
+O hash é SHA-256 sobre um JSON produzido por uma struct de ordem fixa com os campos
+`providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`,
+`kind`, `amount`, `currency` e `referenceExternalTransactionId`. O valor monetário é
+canonicalizado pela representação de `Money`. A chave de idempotência, IDs internos,
+timestamps e metadados de HTTP/SQS ficam fora do hash. Assim, o mesmo conteúdo de
+negócio gera os mesmos 32 bytes nos dois transportes, enquanto provedores ou conteúdos
+diferentes não compartilham identidade.
 
 Ainda não há publicação de outbox nesta operação; o registro atômico dos eventos será
 adicionado antes de expor os fluxos HTTP/SQS.
@@ -120,8 +135,8 @@ de uma permissão/client separado.
 
 ## Próximas decisões e trabalho pendente
 
-Ainda estão pendentes a canonicalização comum do payload entre HTTP/SQS, retomada de
-referências pendentes com retry e expiração, mapeamento de conflitos de reversão para
+Ainda estão pendentes a retomada de referências pendentes com retry e expiração,
+mapeamento de conflitos de reversão para
 códigos de rejeição, inbox/outbox, middleware HTTP de autenticação e isolamento por
 provedor, autorização de operações internas, composição e lifecycle com Uber Fx, API
 HTTP, consumidor SQS, métricas, logs estruturados, Dockerfile e testes de concorrência
