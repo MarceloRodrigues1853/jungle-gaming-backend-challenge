@@ -129,7 +129,7 @@ func TestSubmitWagerRejectsAmbiguousJSON(t *testing.T) {
 func TestWalletRoutesRequireInternalIdentity(t *testing.T) {
 	t.Parallel()
 	manager := &walletManagerStub{}
-	handler, err := NewHandler(&authenticatorStub{principal: auth.Principal{Role: auth.RoleProvider, ProviderID: "provider-a"}}, &submitterSpy{}, manager, readinessStub{})
+	handler, err := NewHandler(&authenticatorStub{principal: auth.Principal{Role: auth.RoleProvider, ProviderID: "provider-a"}}, &submitterSpy{}, manager, readinessStub{}, financialQueriesStub{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestOpenAndGetWalletExposeExactMoney(t *testing.T) {
 	balance, _ := domain.ParseMoney("100.00", "BRL")
 	wallet, _ := domain.NewWalletWithBalance("wallet-1", "player-1", balance, now)
 	manager := &walletManagerStub{wallet: wallet, exists: true}
-	handler, err := NewHandler(&authenticatorStub{principal: auth.Principal{Role: auth.RoleInternal}}, &submitterSpy{}, manager, readinessStub{})
+	handler, err := NewHandler(&authenticatorStub{principal: auth.Principal{Role: auth.RoleInternal}}, &submitterSpy{}, manager, readinessStub{}, financialQueriesStub{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestOpenAndGetWalletExposeExactMoney(t *testing.T) {
 func TestHealthChecksArePublicAndReadinessUsesPostgres(t *testing.T) {
 	t.Parallel()
 
-	liveHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, &walletManagerStub{}, readinessStub{})
+	liveHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, &walletManagerStub{}, readinessStub{}, financialQueriesStub{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestHealthChecksArePublicAndReadinessUsesPostgres(t *testing.T) {
 		t.Fatalf("liveness status = %d", live.Code)
 	}
 
-	unreadyHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, &walletManagerStub{}, readinessStub{err: errors.New("postgres unavailable")})
+	unreadyHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, &walletManagerStub{}, readinessStub{err: errors.New("postgres unavailable")}, financialQueriesStub{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,6 +196,37 @@ func TestHealthChecksArePublicAndReadinessUsesPostgres(t *testing.T) {
 	unreadyHandler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
 	if ready.Code != http.StatusServiceUnavailable {
 		t.Fatalf("readiness status = %d, body = %s", ready.Code, ready.Body.String())
+	}
+}
+
+// TestQueryRoutesEnforceProviderAndExposeExactMoney cobre os contratos de
+// leitura sem permitir que um provedor consulte dados de outro.
+func TestQueryRoutesEnforceProviderAndExposeExactMoney(t *testing.T) {
+	money, _ := domain.ParseMoney("75.00", "BRL")
+	queries := financialQueriesStub{transaction: application.TransactionView{
+		ID: "transaction-1", ProviderID: "provider-a", ExternalTransactionID: "external-1",
+		WalletID: "wallet-1", PlayerID: "player-1", RoundID: "round-1", GameID: "game-1",
+		Kind: domain.TransactionBet, Money: money, Status: domain.TransactionProcessed,
+		ResultBalance: money, HasResultBalance: true, CreatedAt: fixedHTTPTime(), UpdatedAt: fixedHTTPTime(),
+	}, transactionExists: true}
+	handler, err := NewHandler(&authenticatorStub{principal: auth.Principal{Role: auth.RoleProvider, ProviderID: "provider-a"}},
+		&submitterSpy{}, &walletManagerStub{}, readinessStub{}, queries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/wagering/transactions/transaction-1", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"amount":"75.00"`) {
+		t.Fatalf("transaction response = %d %s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/providers/provider-b/wagering/transactions/external-1", nil)
+	request.Header.Set("Authorization", "Bearer token")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("cross-provider status = %d", response.Code)
 	}
 }
 
@@ -244,7 +275,7 @@ func (spy *submitterSpy) Submit(_ context.Context, providerID, idempotencyKey st
 // testHandler falha imediatamente se as dependências do roteador forem inválidas.
 func testHandler(t *testing.T, authenticator Authenticator, submitter WagerSubmitter) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(authenticator, submitter, &walletManagerStub{}, readinessStub{})
+	handler, err := NewHandler(authenticator, submitter, &walletManagerStub{}, readinessStub{}, financialQueriesStub{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,6 +286,24 @@ func testHandler(t *testing.T, authenticator Authenticator, submitter WagerSubmi
 type readinessStub struct{ err error }
 
 func (stub readinessStub) Ping(context.Context) error { return stub.err }
+
+type financialQueriesStub struct {
+	transaction       application.TransactionView
+	transactionExists bool
+}
+
+func (financialQueriesStub) ListWalletLedger(context.Context, string, string, int) (application.LedgerPage, bool, error) {
+	return application.LedgerPage{}, false, nil
+}
+func (stub financialQueriesStub) GetProviderTransactionByID(context.Context, string, string) (application.TransactionView, bool, error) {
+	return stub.transaction, stub.transactionExists, nil
+}
+func (stub financialQueriesStub) GetProviderTransactionByExternalID(context.Context, string, string) (application.TransactionView, bool, error) {
+	return stub.transaction, stub.transactionExists, nil
+}
+func (financialQueriesStub) ReconcileWallet(context.Context, string) (application.ReconciliationResult, bool, error) {
+	return application.ReconciliationResult{}, false, nil
+}
 
 // performWagerRequest monta uma requisição equivalente à futura chamada do Postman.
 func performWagerRequest(handler http.Handler, authorization, idempotencyKey, body string) *httptest.ResponseRecorder {
@@ -278,4 +327,8 @@ func assertErrorCode(t *testing.T, response *httptest.ResponseRecorder, code str
 	if !strings.Contains(response.Body.String(), `"code":"`+code+`"`) {
 		t.Fatalf("response body = %s, want code %s", response.Body.String(), code)
 	}
+}
+
+func fixedHTTPTime() time.Time {
+	return time.Date(2026, time.September, 26, 12, 0, 0, 0, time.UTC)
 }

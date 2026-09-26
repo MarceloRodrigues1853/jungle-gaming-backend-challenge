@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,21 +46,153 @@ type Handler struct {
 	wagers        WagerSubmitter
 	wallets       WalletManager
 	readiness     Readiness
+	queries       application.FinancialQueries
 }
 
 // NewHandler cria as rotas e aplica autenticação antes dos endpoints protegidos.
-func NewHandler(authenticator Authenticator, wagers WagerSubmitter, wallets WalletManager, readiness Readiness) (http.Handler, error) {
-	if authenticator == nil || wagers == nil || wallets == nil || readiness == nil {
+func NewHandler(authenticator Authenticator, wagers WagerSubmitter, wallets WalletManager, readiness Readiness, queries application.FinancialQueries) (http.Handler, error) {
+	if authenticator == nil || wagers == nil || wallets == nil || readiness == nil || queries == nil {
 		return nil, errors.New("HTTP authenticator, wager service, wallet service, and readiness are required")
 	}
-	handler := &Handler{authenticator: authenticator, wagers: wagers, wallets: wallets, readiness: readiness}
+	handler := &Handler{authenticator: authenticator, wagers: wagers, wallets: wallets, readiness: readiness, queries: queries}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", handler.live)
 	mux.HandleFunc("GET /health/ready", handler.ready)
 	mux.Handle("POST /wagering/transactions", handler.requireProvider(http.HandlerFunc(handler.submitWager)))
 	mux.Handle("POST /wallets", handler.requireInternal(http.HandlerFunc(handler.openWallet)))
 	mux.Handle("GET /wallets/{walletId}", handler.requireInternal(http.HandlerFunc(handler.getWallet)))
+	mux.Handle("GET /wallets/{walletId}/ledger", handler.requireInternal(http.HandlerFunc(handler.listLedger)))
+	mux.Handle("POST /wallets/{walletId}/reconciliation", handler.requireInternal(http.HandlerFunc(handler.reconcileWallet)))
+	mux.Handle("GET /wagering/transactions/{transactionId}", handler.requireProvider(http.HandlerFunc(handler.getTransaction)))
+	mux.Handle("GET /providers/{providerId}/wagering/transactions/{externalTransactionId}", handler.requireProvider(http.HandlerFunc(handler.getProviderTransaction)))
 	return mux, nil
+}
+
+func (handler *Handler) listLedger(writer http.ResponseWriter, request *http.Request) {
+	limit := 50
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeError(writer, http.StatusBadRequest, "INVALID_LIMIT", "limit must be between 1 and 100")
+			return
+		}
+		limit = parsed
+	}
+	page, exists, err := handler.queries.ListWalletLedger(request.Context(), request.PathValue("walletId"), request.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		if errors.Is(err, application.ErrInvalidLedgerQuery) {
+			writeError(writer, http.StatusBadRequest, "INVALID_LEDGER_QUERY", "ledger cursor or parameters are invalid")
+		} else {
+			writeError(writer, http.StatusServiceUnavailable, "LEDGER_UNAVAILABLE", "wallet ledger could not be read")
+		}
+		return
+	}
+	if !exists {
+		writeError(writer, http.StatusNotFound, "WALLET_NOT_FOUND", "the wallet was not found")
+		return
+	}
+	response := ledgerPageResponse{NextCursor: page.NextCursor}
+	for _, item := range page.Items {
+		response.Items = append(response.Items, ledgerItemResponse{ID: item.ID, TransactionID: item.TransactionID,
+			Direction: string(item.Direction), Money: moneyFromDomain(item.Money),
+			BalanceBefore: moneyFromDomain(item.BalanceBefore), BalanceAfter: moneyFromDomain(item.BalanceAfter), CreatedAt: item.CreatedAt})
+	}
+	writeJSON(writer, http.StatusOK, response)
+}
+
+func (handler *Handler) reconcileWallet(writer http.ResponseWriter, request *http.Request) {
+	result, exists, err := handler.queries.ReconcileWallet(request.Context(), request.PathValue("walletId"))
+	if err != nil {
+		writeError(writer, http.StatusServiceUnavailable, "RECONCILIATION_UNAVAILABLE", "wallet reconciliation could not be completed")
+		return
+	}
+	if !exists {
+		writeError(writer, http.StatusNotFound, "WALLET_NOT_FOUND", "the wallet was not found")
+		return
+	}
+	writeJSON(writer, http.StatusOK, reconciliationResponse{WalletID: result.WalletID,
+		StoredBalance: moneyFromDomain(result.StoredBalance), CalculatedBalance: moneyFromDomain(result.CalculatedBalance),
+		Difference: moneyFromDomain(result.Difference), Consistent: result.Consistent, CheckedEntries: result.CheckedEntries})
+}
+
+func (handler *Handler) getTransaction(writer http.ResponseWriter, request *http.Request) {
+	principal, _ := requestPrincipal(request.Context())
+	view, exists, err := handler.queries.GetProviderTransactionByID(request.Context(), principal.ProviderID, request.PathValue("transactionId"))
+	handler.writeTransactionView(writer, view, exists, err)
+}
+
+func (handler *Handler) getProviderTransaction(writer http.ResponseWriter, request *http.Request) {
+	principal, _ := requestPrincipal(request.Context())
+	if request.PathValue("providerId") != principal.ProviderID {
+		writeError(writer, http.StatusForbidden, "PROVIDER_MISMATCH", "authenticated provider cannot read another provider's transactions")
+		return
+	}
+	view, exists, err := handler.queries.GetProviderTransactionByExternalID(request.Context(), principal.ProviderID, request.PathValue("externalTransactionId"))
+	handler.writeTransactionView(writer, view, exists, err)
+}
+
+func (handler *Handler) writeTransactionView(writer http.ResponseWriter, view application.TransactionView, exists bool, err error) {
+	if err != nil {
+		writeError(writer, http.StatusServiceUnavailable, "TRANSACTION_UNAVAILABLE", "transaction could not be read")
+		return
+	}
+	if !exists {
+		writeError(writer, http.StatusNotFound, "TRANSACTION_NOT_FOUND", "the transaction was not found")
+		return
+	}
+	response := transactionViewResponse{TransactionID: view.ID, ExternalTransactionID: view.ExternalTransactionID,
+		WalletID: view.WalletID, PlayerID: view.PlayerID, RoundID: view.RoundID, GameID: view.GameID,
+		Kind: string(view.Kind), Money: moneyFromDomain(view.Money), Status: string(view.Status),
+		FailureCode: view.FailureCode, ReferenceExternalTransactionID: view.ReferenceExternalID,
+		ReferenceTransactionID: view.ReferenceID, CreatedAt: view.CreatedAt, UpdatedAt: view.UpdatedAt}
+	if view.HasResultBalance {
+		balance := moneyFromDomain(view.ResultBalance)
+		response.ResultBalance = &balance
+	}
+	writeJSON(writer, http.StatusOK, response)
+}
+
+type ledgerPageResponse struct {
+	Items      []ledgerItemResponse `json:"items"`
+	NextCursor string               `json:"nextCursor,omitempty"`
+}
+type ledgerItemResponse struct {
+	ID            string        `json:"id"`
+	TransactionID string        `json:"transactionId"`
+	Direction     string        `json:"direction"`
+	Money         moneyResponse `json:"money"`
+	BalanceBefore moneyResponse `json:"balanceBefore"`
+	BalanceAfter  moneyResponse `json:"balanceAfter"`
+	CreatedAt     time.Time     `json:"createdAt"`
+}
+type reconciliationResponse struct {
+	WalletID          string        `json:"walletId"`
+	StoredBalance     moneyResponse `json:"storedBalance"`
+	CalculatedBalance moneyResponse `json:"calculatedBalance"`
+	Difference        moneyResponse `json:"difference"`
+	Consistent        bool          `json:"consistent"`
+	CheckedEntries    int64         `json:"checkedEntries"`
+}
+type transactionViewResponse struct {
+	TransactionID                  string         `json:"transactionId"`
+	ExternalTransactionID          string         `json:"externalTransactionId"`
+	WalletID                       string         `json:"walletId"`
+	PlayerID                       string         `json:"playerId"`
+	RoundID                        string         `json:"roundId"`
+	GameID                         string         `json:"gameId"`
+	Kind                           string         `json:"kind"`
+	Money                          moneyResponse  `json:"money"`
+	Status                         string         `json:"status"`
+	FailureCode                    string         `json:"failureCode,omitempty"`
+	ReferenceExternalTransactionID string         `json:"referenceExternalTransactionId,omitempty"`
+	ReferenceTransactionID         string         `json:"referenceTransactionId,omitempty"`
+	ResultBalance                  *moneyResponse `json:"resultBalance,omitempty"`
+	CreatedAt                      time.Time      `json:"createdAt"`
+	UpdatedAt                      time.Time      `json:"updatedAt"`
+}
+
+func moneyFromDomain(money domain.Money) moneyResponse {
+	return moneyResponse{Amount: money.String(), Currency: money.Currency()}
 }
 
 // live informa somente que o processo HTTP está em execução.

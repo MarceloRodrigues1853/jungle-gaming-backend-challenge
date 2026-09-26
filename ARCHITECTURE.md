@@ -212,6 +212,22 @@ retornam `202`. Entrada inválida usa `400`, divergência de identidade usa `403
 de idempotência usa `409`, referência ainda ausente retorna `202`, carteira inexistente usa `404` e
 indisponibilidade transitória usa `503`. Os erros têm envelope JSON e código estável.
 
+### Consultas e reconciliação
+
+As consultas de transação sempre incluem o `providerId` autenticado no predicado SQL.
+`GET /wagering/transactions/{transactionId}` e a busca por ID externo não retornam uma
+operação pertencente a outro provedor. Estados pendentes, códigos de falha, referência
+resolvida e saldo observado no processamento permanecem disponíveis no resultado.
+
+O ledger é ordenado por `(created_at, id)` decrescente e usa um cursor opaco Base64URL
+com os dois valores. A próxima página aplica comparação de tupla, evitando repetir ou
+pular registros com o mesmo timestamp. O limite padrão é 50 e o máximo é 100.
+
+`POST /wallets/{walletId}/reconciliation` abre uma transação PostgreSQL somente de
+leitura em `REPEATABLE READ`. Nessa mesma visão, lê o saldo armazenado e calcula
+créditos menos débitos do ledger. A resposta informa os dois valores, diferença,
+quantidade de lançamentos e consistência, sem modificar a carteira.
+
 O binário `cmd/api` compõe configuração, pool PostgreSQL, repositórios, autenticação,
 casos de uso, handlers e servidor usando `fx.Provide` e `fx.Invoke`. O pool é validado
 no `OnStart`; depois o servidor abre sua porta. No `OnStop`, a ordem inversa encerra o
@@ -225,9 +241,8 @@ não estiver disponível. A verificação ativa do SQS no readiness continua pen
 
 ## Próximas decisões e trabalho pendente
 
-Ainda estão pendentes o mapeamento de conflitos de reversão para códigos de rejeição, demais rotas da
-API HTTP, readiness do SQS, métricas adicionais,
-Dockerfile e testes de concorrência
+Ainda estão pendentes o mapeamento de conflitos de reversão para códigos de rejeição,
+readiness do SQS, métricas adicionais, Dockerfile e testes de concorrência
 distribuída com pelo menos três processos independentes. Os testes PostgreSQL locais já
 cobrem replay e operações simultâneas, mas não substituem esse cenário multi-processo.
 As estratégias para esses pontos serão documentadas junto com cada etapa, antes de serem

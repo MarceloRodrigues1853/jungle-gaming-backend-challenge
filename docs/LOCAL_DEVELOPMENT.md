@@ -127,6 +127,34 @@ A resposta esperada é `201` com `id`, saldo textual e `version: 1`. Copie o cam
 e consulte `GET http://127.0.0.1:8090/wallets/<id>` com o mesmo token interno; a resposta
 esperada é `200`. Uma segunda abertura para o mesmo `playerId` e moeda retorna `409`.
 
+## Consultas e reconciliação
+
+Com o token interno, liste o ledger usando paginação por cursor:
+
+```text
+GET http://127.0.0.1:8090/wallets/WALLET_ID/ledger?limit=50
+GET http://127.0.0.1:8090/wallets/WALLET_ID/ledger?limit=50&cursor=NEXT_CURSOR
+```
+
+O campo `nextCursor` aparece somente quando existe outra página. Para reconstruir o
+saldo sem alterar a carteira:
+
+```text
+POST http://127.0.0.1:8090/wallets/WALLET_ID/reconciliation
+Authorization: Bearer <internal_access_token>
+```
+
+Com o token de `provider-a`, consulte uma operação interna ou sua identidade externa:
+
+```text
+GET http://127.0.0.1:8090/wagering/transactions/TRANSACTION_ID
+GET http://127.0.0.1:8090/providers/provider-a/wagering/transactions/EXTERNAL_TRANSACTION_ID
+Authorization: Bearer <provider_access_token>
+```
+
+O provedor presente na URL precisa coincidir com a identidade do token. Uma tentativa
+de consultar outro provedor retorna `403`.
+
 ## Envio de uma aposta
 
 Crie uma requisição `POST` para:
