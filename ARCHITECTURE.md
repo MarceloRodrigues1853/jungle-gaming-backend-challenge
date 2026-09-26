@@ -61,9 +61,8 @@ reversão direta da `BET`. O domínio valida o tipo e o vínculo da referência;
 002 reforça a exclusividade no PostgreSQL. A tradução de conflitos de unicidade em um
 código estável de rejeição será feita pelo caso de uso da aplicação.
 
-`NewExternalTransaction` recebe um hash de 32 bytes já calculado. A canonicalização
-do payload e o algoritmo/campos exatos do hash serão definidos no caso de uso comum
-de HTTP e SQS, ainda não implementado.
+`NewExternalTransaction` recebe um hash de 32 bytes já calculado pelo caso de uso
+compartilhado entre HTTP e SQS.
 
 ### Processamento financeiro em memória
 
@@ -130,8 +129,8 @@ positiva de carteira usa o mesmo contrato e grava seus dois eventos no commit in
 
 Os envelopes possuem `eventId`, `eventType`, `aggregateId`, `correlationId`,
 `occurredAt`, versão `1` e `data` tipado. Valores monetários continuam representados
-como strings. Esses registros ainda não significam publicação: um worker separado
-será responsável pelo envio e pela confirmação em `published_at`.
+como strings. Esses registros ainda não significam publicação: o worker da outbox é
+responsável pelo envio e pela confirmação em `published_at`.
 
 O publicador reserva lotes com `FOR UPDATE SKIP LOCKED`, registra `locked_by`, prazo
 da reserva e número da tentativa, e permite múltiplas instâncias sem lock global.
@@ -141,6 +140,27 @@ a reserva ainda pertence ao worker. No FIFO de saída, `eventId` é a identidade
 deduplicação e `aggregateId` mantém a ordem por agregado. Como a confirmação do SQS e
 do PostgreSQL não é atômica, uma interrupção entre essas duas etapas pode republicar
 o mesmo `eventId`; consumidores devem deduplicá-lo.
+
+### Consumidor SQS e inbox
+
+`internal/sqsconsumer` usa long polling sobre `wager-transactions.fifo`, valida um
+único envelope JSON sem campos desconhecidos e delega a mesma operação usada pelo
+HTTP para `application.WagerService`. O corpo bruto recebe SHA-256 e o par
+`(consumerName, messageId)` identifica a entrega na inbox. Uma reentrega com o mesmo
+ID e conteúdo é segura; reutilizar o ID com outro hash é conflito permanente.
+
+O PostgreSQL insere ou bloqueia a inbox dentro da mesma transação que bloqueia a
+carteira, registra a operação, atualiza saldo, cria ledger e grava outbox. O campo
+`completed_at` é preenchido antes desse único commit. O consumidor só chama
+`DeleteMessage` depois do retorno bem-sucedido do commit, portanto uma interrupção
+antes da remoção causa reentrega e replay persistente, não novo débito.
+
+Falhas deixam a mensagem na fila e aumentam sua visibility timeout até o limite de
+cinco minutos. A política de redrive move a mensagem para
+`wager-transactions-dlq.fifo` após cinco recebimentos. O `MessageGroupId` de entrada
+deve ser o `walletId`, mantendo ordem por carteira no broker sem substituir os locks
+do PostgreSQL. No shutdown, o Fx cancela o long polling, aguarda o processamento atual
+e só depois fecha as dependências.
 
 ### Identidade de provedores
 
@@ -191,13 +211,13 @@ escrita, cabeçalhos e conexões ociosas. Instruções de Postman estão em
 
 `GET /health/live` confirma somente que o processo HTTP responde. `GET /health/ready`
 usa prazo de dois segundos para consultar o PostgreSQL e devolve `503` se a dependência
-não estiver disponível. A prontidão de SQS será incorporada quando o consumidor existir.
+não estiver disponível. A verificação ativa do SQS no readiness continua pendente.
 
 ## Próximas decisões e trabalho pendente
 
 Ainda estão pendentes a retomada de referências pendentes com retry e expiração,
-mapeamento de conflitos de reversão para códigos de rejeição, inbox, demais rotas da
-API HTTP, consumidor SQS, métricas adicionais,
+mapeamento de conflitos de reversão para códigos de rejeição, demais rotas da
+API HTTP, readiness do SQS, métricas adicionais,
 Dockerfile e testes de concorrência
 distribuída com pelo menos três processos independentes. Os testes PostgreSQL locais já
 cobrem replay e operações simultâneas, mas não substituem esse cenário multi-processo.

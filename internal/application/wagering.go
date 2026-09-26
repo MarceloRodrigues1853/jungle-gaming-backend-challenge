@@ -43,9 +43,18 @@ type SubmitWagerCommand struct {
 	ReferenceExternalID   string     `json:"referenceExternalTransactionId,omitempty"`
 }
 
+// InboxDelivery identifica uma mensagem SQS e seu conteúdo original para que a
+// deduplicação do transporte seja confirmada no mesmo commit financeiro.
+type InboxDelivery struct {
+	ConsumerName string
+	MessageID    string
+	PayloadHash  [sha256.Size]byte
+	ReceivedAt   time.Time
+}
+
 // TransactionProcessor persiste e processa a operação financeira atomicamente.
 type TransactionProcessor interface {
-	ProcessWagerTransaction(context.Context, domain.WagerTransaction, *domain.WagerTransaction, string, WagerEventIDs, time.Time) (domain.WagerProcessingResult, error)
+	ProcessWagerTransaction(context.Context, domain.WagerTransaction, *domain.WagerTransaction, string, WagerEventIDs, *InboxDelivery, time.Time) (domain.WagerProcessingResult, error)
 }
 
 // ReferenceFinder localiza uma operação já persistida no mesmo provedor.
@@ -79,6 +88,19 @@ func NewWagerService(processor TransactionProcessor, references ReferenceFinder,
 
 // Submit valida, canonicaliza e processa uma operação em nome do provedor autenticado.
 func (service *WagerService) Submit(ctx context.Context, providerID, idempotencyKey string, command SubmitWagerCommand) (domain.WagerProcessingResult, error) {
+	return service.submit(ctx, providerID, idempotencyKey, command, nil)
+}
+
+// SubmitFromInbox processa a mesma regra do HTTP, incluindo a identidade da
+// mensagem na transação SQL para que inbox e efeitos financeiros sejam atômicos.
+func (service *WagerService) SubmitFromInbox(ctx context.Context, providerID, idempotencyKey string, command SubmitWagerCommand, delivery InboxDelivery) (domain.WagerProcessingResult, error) {
+	if err := validateInboxDelivery(delivery); err != nil {
+		return domain.WagerProcessingResult{}, err
+	}
+	return service.submit(ctx, providerID, idempotencyKey, command, &delivery)
+}
+
+func (service *WagerService) submit(ctx context.Context, providerID, idempotencyKey string, command SubmitWagerCommand, delivery *InboxDelivery) (domain.WagerProcessingResult, error) {
 	if service == nil || service.processor == nil || service.ids == nil || service.clock == nil {
 		return domain.WagerProcessingResult{}, errors.New("wager service is not initialized")
 	}
@@ -151,7 +173,20 @@ func (service *WagerService) Submit(ctx context.Context, providerID, idempotency
 		return domain.WagerProcessingResult{}, fmt.Errorf("generate balance event id: %w", err)
 	}
 	return service.processor.ProcessWagerTransaction(ctx, transaction, reference, ledgerEntryID,
-		WagerEventIDs{Transaction: transactionEventID, WalletBalance: balanceEventID}, now)
+		WagerEventIDs{Transaction: transactionEventID, WalletBalance: balanceEventID}, delivery, now)
+}
+
+func validateInboxDelivery(delivery InboxDelivery) error {
+	if err := validateExactIdentifier("consumerName", delivery.ConsumerName); err != nil {
+		return err
+	}
+	if err := validateExactIdentifier("messageId", delivery.MessageID); err != nil {
+		return err
+	}
+	if delivery.ReceivedAt.IsZero() {
+		return fmt.Errorf("%w: receivedAt is required", ErrInvalidWagerCommand)
+	}
+	return nil
 }
 
 // HashWagerPayload gera SHA-256 sobre JSON canônico com todos os campos de negócio.

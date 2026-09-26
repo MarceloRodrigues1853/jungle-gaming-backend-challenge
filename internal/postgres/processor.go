@@ -22,7 +22,7 @@ type persistedIdentity struct {
 
 // ProcessWagerTransaction grava a transação, o saldo e o ledger no mesmo commit SQL.
 // O lock fica restrito à carteira afetada, permitindo paralelismo entre carteiras distintas.
-func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction domain.WagerTransaction, reference *domain.WagerTransaction, ledgerEntryID string, eventIDs application.WagerEventIDs, now time.Time) (domain.WagerProcessingResult, error) {
+func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction domain.WagerTransaction, reference *domain.WagerTransaction, ledgerEntryID string, eventIDs application.WagerEventIDs, delivery *application.InboxDelivery, now time.Time) (domain.WagerProcessingResult, error) {
 	if store == nil || store.pool == nil {
 		return domain.WagerProcessingResult{}, errors.New("postgres store is not initialized")
 	}
@@ -35,6 +35,12 @@ func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction dom
 		return domain.WagerProcessingResult{}, fmt.Errorf("begin financial transaction: %w", err)
 	}
 	defer func() { _ = dbtx.Rollback(ctx) }()
+
+	if delivery != nil {
+		if err := registerInboxDelivery(ctx, dbtx, *delivery); err != nil {
+			return domain.WagerProcessingResult{}, err
+		}
+	}
 
 	wallet, err := lockWallet(ctx, dbtx, transaction.WalletID(), transaction.PlayerID(), transaction.Money().Currency())
 	if err != nil {
@@ -49,6 +55,11 @@ func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction dom
 		result, err := loadIdempotentReplay(ctx, dbtx, transaction)
 		if err != nil {
 			return domain.WagerProcessingResult{}, err
+		}
+		if delivery != nil {
+			if err := completeInboxDelivery(ctx, dbtx, *delivery, now); err != nil {
+				return domain.WagerProcessingResult{}, err
+			}
 		}
 		if err := dbtx.Commit(ctx); err != nil {
 			return domain.WagerProcessingResult{}, fmt.Errorf("finish idempotent replay: %w", err)
@@ -83,10 +94,50 @@ func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction dom
 	if err := insertOutboxEvents(ctx, dbtx, events); err != nil {
 		return domain.WagerProcessingResult{}, err
 	}
+	if delivery != nil {
+		if err := completeInboxDelivery(ctx, dbtx, *delivery, now); err != nil {
+			return domain.WagerProcessingResult{}, err
+		}
+	}
 	if err := dbtx.Commit(ctx); err != nil {
 		return domain.WagerProcessingResult{}, fmt.Errorf("commit financial transaction: %w", err)
 	}
 	return result, nil
+}
+
+// registerInboxDelivery cria a identidade durável ou valida uma reentrega do
+// mesmo conteúdo. O lock serializa entregas concorrentes do mesmo messageId.
+func registerInboxDelivery(ctx context.Context, tx pgx.Tx, delivery application.InboxDelivery) error {
+	if _, err := tx.Exec(ctx, `INSERT INTO inbox_messages
+		(consumer_name, message_id, payload_hash, received_at)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (consumer_name, message_id) DO NOTHING`,
+		delivery.ConsumerName, delivery.MessageID, delivery.PayloadHash[:], delivery.ReceivedAt.UTC()); err != nil {
+		return fmt.Errorf("insert inbox message: %w", err)
+	}
+	var persistedHash []byte
+	if err := tx.QueryRow(ctx, `SELECT payload_hash FROM inbox_messages
+		WHERE consumer_name = $1 AND message_id = $2 FOR UPDATE`,
+		delivery.ConsumerName, delivery.MessageID).Scan(&persistedHash); err != nil {
+		return fmt.Errorf("lock inbox message: %w", err)
+	}
+	if !bytes.Equal(persistedHash, delivery.PayloadHash[:]) {
+		return fmt.Errorf("%w: message id was reused with different content", application.ErrIdempotencyConflict)
+	}
+	return nil
+}
+
+func completeInboxDelivery(ctx context.Context, tx pgx.Tx, delivery application.InboxDelivery, completedAt time.Time) error {
+	tag, err := tx.Exec(ctx, `UPDATE inbox_messages SET completed_at = COALESCE(completed_at, $1)
+		WHERE consumer_name = $2 AND message_id = $3 AND payload_hash = $4`,
+		completedAt.UTC(), delivery.ConsumerName, delivery.MessageID, delivery.PayloadHash[:])
+	if err != nil {
+		return fmt.Errorf("complete inbox message: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("inbox message was not completed")
+	}
+	return nil
 }
 
 // insertOutboxEvents grava snapshots que só ficarão visíveis após o commit financeiro.

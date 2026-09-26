@@ -24,12 +24,40 @@ valores são apenas conveniências de desenvolvimento. Podem ser substituídos p
 variáveis `HTTP_ADDRESS`, `DATABASE_URL`, `OIDC_INTROSPECTION_URL`,
 `OIDC_INTROSPECTION_CLIENT_ID`, `OIDC_INTROSPECTION_CLIENT_SECRET`,
 `PROVIDER_CLIENT_ID`, `PROVIDER_ID`, `AWS_REGION`, `SQS_ENDPOINT`,
-`SQS_OUTPUT_QUEUE_URL`, `OUTBOX_POLL_INTERVAL`, `OUTBOX_LOCK_DURATION` e
-`OUTBOX_BATCH_SIZE`.
+`SQS_OUTPUT_QUEUE_URL`, `SQS_INPUT_QUEUE_URL`, `SQS_CONSUMER_NAME`,
+`SQS_WAIT_TIME_SECONDS`, `SQS_VISIBILITY_TIMEOUT_SECONDS`, `SQS_MAX_MESSAGES`,
+`OUTBOX_POLL_INTERVAL`, `OUTBOX_LOCK_DURATION` e `OUTBOX_BATCH_SIZE`.
 
 O LocalStack provisiona `jungle-events.fifo` para eventos de saída e também prepara
-`wager-transactions.fifo` e sua DLQ para a próxima etapa do consumidor. O publicador
+`wager-transactions.fifo` e sua DLQ. O publicador
 usa `eventId` como `MessageDeduplicationId` e `aggregateId` como `MessageGroupId`.
+O consumidor usa o `messageId` do envelope na inbox e só remove uma mensagem depois
+que inbox, transação, saldo, ledger e outbox foram confirmados no PostgreSQL.
+
+## Envio manual pela fila SQS
+
+Com a aplicação e os containers ativos, envie o envelope abaixo pela AWS CLI do
+LocalStack. Substitua `PLAYER_ID` e `WALLET_ID` por uma carteira existente. Use o
+`walletId` como `MessageGroupId` e um valor novo como `MessageDeduplicationId`:
+
+```sh
+docker compose exec -T localstack awslocal sqs send-message \
+  --queue-url http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/wager-transactions.fifo \
+  --message-group-id WALLET_ID \
+  --message-deduplication-id sqs-demo-1 \
+  --message-body '{"messageId":"sqs-demo-1","type":"WagerTransactionRequested","occurredAt":"2026-09-26T23:00:00Z","data":{"providerId":"provider-a","externalTransactionId":"sqs-demo-bet-1","idempotencyKey":"provider-a:sqs-demo-bet-1","playerId":"PLAYER_ID","walletId":"WALLET_ID","roundId":"sqs-round-1","gameId":"sqs-demo","kind":"BET","money":{"amount":"1.00","currency":"BRL"}}}'
+```
+
+Confirme o processamento no banco:
+
+```sql
+SELECT consumer_name, message_id, completed_at FROM inbox_messages ORDER BY received_at DESC LIMIT 5;
+SELECT id, status, result_balance_minor FROM wager_transactions ORDER BY created_at DESC LIMIT 5;
+```
+
+Mensagens inválidas ou falhas transitórias não são apagadas. A visibilidade recebe
+backoff e, depois de cinco recebimentos, o redrive envia a mensagem para
+`wager-transactions-dlq.fifo`.
 
 O cliente `wallet-internal`, reservado às operações administrativas de carteira, usa
 o segredo local `wallet-internal-local-secret`. Tokens desse cliente não

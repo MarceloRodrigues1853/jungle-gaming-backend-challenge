@@ -23,7 +23,7 @@ func TestPostgresIdempotentReplayReturnsOriginalBalance(t *testing.T) {
 	walletID, playerID := seedIntegrationWallet(t, pool, 10_000, now)
 
 	bet := integrationTransaction(t, "bet-original", "external-bet", "provider-a:bet", walletID, playerID, domain.TransactionBet, "25.00", "same-payload", now)
-	first, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ledger-"+bet.ID(), integrationEventIDs(bet.ID()), now.Add(time.Second))
+	first, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ledger-"+bet.ID(), integrationEventIDs(bet.ID()), nil, now.Add(time.Second))
 	if err != nil {
 		t.Fatalf("first ProcessWagerTransaction() error = %v", err)
 	}
@@ -32,11 +32,11 @@ func TestPostgresIdempotentReplayReturnsOriginalBalance(t *testing.T) {
 	}
 
 	win := integrationTransaction(t, "win-after-bet", "external-win", "provider-a:win", walletID, playerID, domain.TransactionWin, "10.00", "win-payload", now.Add(2*time.Second))
-	if _, err := store.ProcessWagerTransaction(context.Background(), win, nil, "ledger-"+win.ID(), integrationEventIDs(win.ID()), now.Add(3*time.Second)); err != nil {
+	if _, err := store.ProcessWagerTransaction(context.Background(), win, nil, "ledger-"+win.ID(), integrationEventIDs(win.ID()), nil, now.Add(3*time.Second)); err != nil {
 		t.Fatalf("WIN ProcessWagerTransaction() error = %v", err)
 	}
 
-	replay, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ignored-ledger", integrationEventIDs("ignored-replay"), now.Add(4*time.Second))
+	replay, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ignored-ledger", integrationEventIDs("ignored-replay"), nil, now.Add(4*time.Second))
 	if err != nil {
 		t.Fatalf("replay ProcessWagerTransaction() error = %v", err)
 	}
@@ -45,7 +45,7 @@ func TestPostgresIdempotentReplayReturnsOriginalBalance(t *testing.T) {
 	}
 
 	changedPayload := integrationTransaction(t, "bet-conflict", "external-bet", "provider-a:bet", walletID, playerID, domain.TransactionBet, "25.00", "different-payload", now.Add(5*time.Second))
-	if _, err := store.ProcessWagerTransaction(context.Background(), changedPayload, nil, "unused-ledger", integrationEventIDs("unused-conflict"), now.Add(6*time.Second)); !errors.Is(err, ErrIdempotencyConflict) {
+	if _, err := store.ProcessWagerTransaction(context.Background(), changedPayload, nil, "unused-ledger", integrationEventIDs("unused-conflict"), nil, now.Add(6*time.Second)); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("changed payload error = %v, want idempotency conflict", err)
 	}
 
@@ -55,6 +55,43 @@ func TestPostgresIdempotentReplayReturnsOriginalBalance(t *testing.T) {
 	}
 	if outboxCount := readWalletOutboxCount(t, pool, walletID); outboxCount != 4 {
 		t.Fatalf("outbox count after replay = %d, want 4 without duplicate events", outboxCount)
+	}
+}
+
+// TestPostgresInboxCompletesAtomicallyWithFinancialEffects comprova que uma
+// mensagem e seus efeitos financeiros compartilham o mesmo commit SQL.
+func TestPostgresInboxCompletesAtomicallyWithFinancialEffects(t *testing.T) {
+	store, pool := integrationStore(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	walletID, playerID := seedIntegrationWallet(t, pool, 10_000, now)
+	bet := integrationTransaction(t, "bet-inbox", "external-inbox", "provider-a:inbox", walletID, playerID, domain.TransactionBet, "25.00", "inbox-payload", now)
+	payloadHash := sha256.Sum256([]byte("complete-sqs-envelope"))
+	delivery := &application.InboxDelivery{ConsumerName: "wager-transactions-v1",
+		MessageID: "message-" + strings.TrimPrefix(walletID, "it-wallet-"), PayloadHash: payloadHash, ReceivedAt: now}
+
+	result, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ledger-"+bet.ID(), integrationEventIDs(bet.ID()), delivery, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("ProcessWagerTransaction() error = %v", err)
+	}
+	if result.Status != domain.TransactionProcessed {
+		t.Fatalf("result status = %s, want PROCESSED", result.Status)
+	}
+	var completedAt *time.Time
+	if err := pool.QueryRow(context.Background(), `SELECT completed_at FROM inbox_messages
+		WHERE consumer_name = $1 AND message_id = $2`, delivery.ConsumerName, delivery.MessageID).Scan(&completedAt); err != nil {
+		t.Fatalf("read inbox message: %v", err)
+	}
+	if completedAt == nil {
+		t.Fatal("inbox completed_at is nil after financial commit")
+	}
+
+	replay, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "unused-ledger", integrationEventIDs("unused-inbox"), delivery, now.Add(2*time.Second))
+	if err != nil || !replay.IdempotentReplay {
+		t.Fatalf("inbox replay = replay %v, error %v", replay.IdempotentReplay, err)
+	}
+	balance, ledgerCount := readWalletAndLedger(t, pool, walletID)
+	if balance != 7_500 || ledgerCount != 1 {
+		t.Fatalf("balance/ledger after replay = %d/%d, want 7500/1", balance, ledgerCount)
 	}
 }
 
@@ -76,7 +113,7 @@ func TestPostgresConcurrentBetsSerializePerWallet(t *testing.T) {
 		go func(index int) {
 			defer wait.Done()
 			results[index], errorsByTransaction[index] = store.ProcessWagerTransaction(
-				context.Background(), transactions[index], nil, "ledger-"+transactions[index].ID(), integrationEventIDs(transactions[index].ID()), now.Add(time.Second),
+				context.Background(), transactions[index], nil, "ledger-"+transactions[index].ID(), integrationEventIDs(transactions[index].ID()), nil, now.Add(time.Second),
 			)
 		}(index)
 	}
@@ -118,7 +155,7 @@ func TestPostgresFindProviderTransactionIsolatesProvider(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	walletID, playerID := seedIntegrationWallet(t, pool, 10_000, now)
 	bet := integrationTransaction(t, "bet-reference", "external-reference", "provider-a:reference", walletID, playerID, domain.TransactionBet, "25.00", "reference-payload", now)
-	if _, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ledger-"+bet.ID(), integrationEventIDs(bet.ID()), now.Add(time.Second)); err != nil {
+	if _, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ledger-"+bet.ID(), integrationEventIDs(bet.ID()), nil, now.Add(time.Second)); err != nil {
 		t.Fatalf("ProcessWagerTransaction() error = %v", err)
 	}
 
@@ -141,7 +178,7 @@ func TestPostgresProcessesWinWithOptionalReference(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	walletID, playerID := seedIntegrationWallet(t, pool, 10_000, now)
 	bet := integrationTransaction(t, "bet-for-win", "external-bet-for-win", "provider-a:bet-for-win", walletID, playerID, domain.TransactionBet, "25.00", "bet-for-win-payload", now)
-	if _, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ledger-"+bet.ID(), integrationEventIDs(bet.ID()), now.Add(time.Second)); err != nil {
+	if _, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ledger-"+bet.ID(), integrationEventIDs(bet.ID()), nil, now.Add(time.Second)); err != nil {
 		t.Fatalf("process referenced BET: %v", err)
 	}
 	reference, exists, err := store.FindProviderTransaction(context.Background(), "provider-a", bet.ExternalTransactionID())
@@ -166,7 +203,7 @@ func TestPostgresProcessesWinWithOptionalReference(t *testing.T) {
 	if err := win.ResolveReference(reference, now.Add(2*time.Second)); err != nil {
 		t.Fatalf("ResolveReference() error = %v", err)
 	}
-	result, err := store.ProcessWagerTransaction(context.Background(), win, &reference, "ledger-"+win.ID(), integrationEventIDs(win.ID()), now.Add(3*time.Second))
+	result, err := store.ProcessWagerTransaction(context.Background(), win, &reference, "ledger-"+win.ID(), integrationEventIDs(win.ID()), nil, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("process referenced WIN: %v", err)
 	}

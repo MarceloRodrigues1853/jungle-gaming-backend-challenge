@@ -162,7 +162,7 @@ type processorSpy struct {
 	eventIDs    WagerEventIDs
 }
 
-func (spy *processorSpy) ProcessWagerTransaction(_ context.Context, transaction domain.WagerTransaction, reference *domain.WagerTransaction, ledgerID string, eventIDs WagerEventIDs, _ time.Time) (domain.WagerProcessingResult, error) {
+func (spy *processorSpy) ProcessWagerTransaction(_ context.Context, transaction domain.WagerTransaction, reference *domain.WagerTransaction, ledgerID string, eventIDs WagerEventIDs, _ *InboxDelivery, _ time.Time) (domain.WagerProcessingResult, error) {
 	spy.called, spy.transaction, spy.reference, spy.ledgerID, spy.eventIDs = true, transaction, reference, ledgerID, eventIDs
 	return domain.WagerProcessingResult{TransactionID: transaction.ID()}, nil
 }
