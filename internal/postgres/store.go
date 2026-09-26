@@ -6,14 +6,15 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/application"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ErrWalletNotFound indica que a carteira da operação não existe no banco.
-var ErrWalletNotFound = errors.New("wallet not found")
+var ErrWalletNotFound = application.ErrWalletNotFound
 
 // ErrIdempotencyConflict indica que uma identidade externa foi reutilizada com conteúdo diferente.
-var ErrIdempotencyConflict = errors.New("idempotency conflict")
+var ErrIdempotencyConflict = application.ErrIdempotencyConflict
 
 // Store agrupa o pool PostgreSQL usado pelos repositórios.
 type Store struct {

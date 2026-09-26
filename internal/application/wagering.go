@@ -18,6 +18,10 @@ var (
 	ErrInvalidWagerCommand = errors.New("invalid wager command")
 	// ErrReferenceNotFound indica que a operação referenciada ainda não está disponível.
 	ErrReferenceNotFound = errors.New("referenced transaction not found")
+	// ErrIdempotencyConflict indica reutilização divergente de uma identidade externa.
+	ErrIdempotencyConflict = errors.New("idempotency conflict")
+	// ErrWalletNotFound indica que a carteira informada não existe para a operação.
+	ErrWalletNotFound = errors.New("wallet not found")
 )
 
 // MoneyInput representa o contrato textual de dinheiro compartilhado por HTTP e SQS.

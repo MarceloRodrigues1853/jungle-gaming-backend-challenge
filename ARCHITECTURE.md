@@ -134,18 +134,31 @@ confidencial, aceita apenas tokens ativos e mapeia `client_id` por uma allowlist
 explícita para o `providerId` interno. Assim, o provedor não deve ser confiado a partir
 do corpo HTTP. As credenciais do realm importado são apenas de desenvolvimento local.
 
-A API ainda não foi criada e o introspector ainda não está ligado a middleware; portanto,
-nenhuma rota financeira está exposta nesta etapa. O próximo passo HTTP deve exigir esse
-principal antes de chamar os casos de uso, e operações internas de carteira precisarão
-de uma permissão/client separado.
+O adaptador `internal/httpapi` protege `POST /wagering/transactions` com Bearer token,
+introspecta a credencial e injeta o principal validado no contexto. O `providerId` do
+JSON precisa coincidir com esse principal antes de o caso de uso ser chamado; ele nunca
+é aceito isoladamente como prova de identidade. Operações internas de carteira ainda
+precisarão de uma permissão/client separado.
+
+### Contrato HTTP de operações
+
+O endpoint limita o corpo a 64 KiB, exige `application/json`, rejeita campos desconhecidos,
+múltiplos valores JSON e `Idempotency-Key` ausente. Uma criação processada retorna `201`;
+replay idempotente retorna `200`; rejeição financeira retorna `422`; estados pendentes
+retornam `202`. Entrada inválida usa `400`, divergência de identidade usa `403`, conflito
+de idempotência ou referência ausente usa `409`, carteira inexistente usa `404` e
+indisponibilidade transitória usa `503`. Os erros têm envelope JSON e código estável.
+
+Nesta etapa existe o adaptador testado, mas ainda não há um binário escutando uma porta.
+A composição por Uber Fx e o servidor com shutdown gracioso serão a próxima integração;
+até lá, o endpoint não está disponível externamente para Postman.
 
 ## Próximas decisões e trabalho pendente
 
 Ainda estão pendentes a retomada de referências pendentes com retry e expiração,
-mapeamento de conflitos de reversão para
-códigos de rejeição, inbox/outbox, middleware HTTP de autenticação e isolamento por
-provedor, autorização de operações internas, composição e lifecycle com Uber Fx, API
-HTTP, consumidor SQS, métricas, logs estruturados, Dockerfile e testes de concorrência
+mapeamento de conflitos de reversão para códigos de rejeição, inbox/outbox, autorização
+de operações internas, composição e lifecycle com Uber Fx, demais rotas da API HTTP,
+consumidor SQS, métricas, logs estruturados, Dockerfile e testes de concorrência
 distribuída com pelo menos três processos independentes. Os testes PostgreSQL locais já
 cobrem replay e operações simultâneas, mas não substituem esse cenário multi-processo.
 As estratégias para esses pontos serão documentadas junto com cada etapa, antes de serem
