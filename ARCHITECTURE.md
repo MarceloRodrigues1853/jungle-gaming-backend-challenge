@@ -133,6 +133,15 @@ Os envelopes possuem `eventId`, `eventType`, `aggregateId`, `correlationId`,
 como strings. Esses registros ainda não significam publicação: um worker separado
 será responsável pelo envio e pela confirmação em `published_at`.
 
+O publicador reserva lotes com `FOR UPDATE SKIP LOCKED`, registra `locked_by`, prazo
+da reserva e número da tentativa, e permite múltiplas instâncias sem lock global.
+Reservas abandonadas voltam a ficar elegíveis após o prazo. Falhas de SQS liberam o
+registro com backoff exponencial limitado; sucesso preenche `published_at` somente se
+a reserva ainda pertence ao worker. No FIFO de saída, `eventId` é a identidade de
+deduplicação e `aggregateId` mantém a ordem por agregado. Como a confirmação do SQS e
+do PostgreSQL não é atômica, uma interrupção entre essas duas etapas pode republicar
+o mesmo `eventId`; consumidores devem deduplicá-lo.
+
 ### Identidade de provedores
 
 O ambiente local usa Keycloak em modo de desenvolvimento, com o realm `jungle-dev` e
@@ -187,8 +196,8 @@ não estiver disponível. A prontidão de SQS será incorporada quando o consumi
 ## Próximas decisões e trabalho pendente
 
 Ainda estão pendentes a retomada de referências pendentes com retry e expiração,
-mapeamento de conflitos de reversão para códigos de rejeição, inbox, publicador da
-outbox, demais rotas da API HTTP, consumidor SQS, métricas adicionais,
+mapeamento de conflitos de reversão para códigos de rejeição, inbox, demais rotas da
+API HTTP, consumidor SQS, métricas adicionais,
 Dockerfile e testes de concorrência
 distribuída com pelo menos três processos independentes. Os testes PostgreSQL locais já
 cobrem replay e operações simultâneas, mas não substituem esse cenário multi-processo.
