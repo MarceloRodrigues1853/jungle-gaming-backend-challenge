@@ -28,6 +28,12 @@ type WagerSubmitter interface {
 	Submit(context.Context, string, string, application.SubmitWagerCommand) (domain.WagerProcessingResult, error)
 }
 
+// WalletManager expõe somente os casos de uso necessários às rotas internas.
+type WalletManager interface {
+	Open(context.Context, application.OpenWalletCommand) (domain.Wallet, error)
+	Get(context.Context, string) (domain.Wallet, bool, error)
+}
+
 // Readiness verifica se a dependência necessária para aceitar trabalho está disponível.
 type Readiness interface {
 	Ping(context.Context) error
@@ -37,19 +43,22 @@ type Readiness interface {
 type Handler struct {
 	authenticator Authenticator
 	wagers        WagerSubmitter
+	wallets       WalletManager
 	readiness     Readiness
 }
 
 // NewHandler cria as rotas e aplica autenticação antes dos endpoints protegidos.
-func NewHandler(authenticator Authenticator, wagers WagerSubmitter, readiness Readiness) (http.Handler, error) {
-	if authenticator == nil || wagers == nil || readiness == nil {
-		return nil, errors.New("HTTP authenticator, wager service, and readiness are required")
+func NewHandler(authenticator Authenticator, wagers WagerSubmitter, wallets WalletManager, readiness Readiness) (http.Handler, error) {
+	if authenticator == nil || wagers == nil || wallets == nil || readiness == nil {
+		return nil, errors.New("HTTP authenticator, wager service, wallet service, and readiness are required")
 	}
-	handler := &Handler{authenticator: authenticator, wagers: wagers, readiness: readiness}
+	handler := &Handler{authenticator: authenticator, wagers: wagers, wallets: wallets, readiness: readiness}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", handler.live)
 	mux.HandleFunc("GET /health/ready", handler.ready)
 	mux.Handle("POST /wagering/transactions", handler.requireProvider(http.HandlerFunc(handler.submitWager)))
+	mux.Handle("POST /wallets", handler.requireInternal(http.HandlerFunc(handler.openWallet)))
+	mux.Handle("GET /wallets/{walletId}", handler.requireInternal(http.HandlerFunc(handler.getWallet)))
 	return mux, nil
 }
 
@@ -91,7 +100,7 @@ func (handler *Handler) submitWager(writer http.ResponseWriter, request *http.Re
 		writeError(writer, http.StatusBadRequest, "INVALID_JSON", "request body must contain one valid JSON object")
 		return
 	}
-	principal, ok := providerPrincipal(request.Context())
+	principal, ok := requestPrincipal(request.Context())
 	if !ok {
 		writeError(writer, http.StatusInternalServerError, "MISSING_PRINCIPAL", "authenticated identity is unavailable")
 		return
@@ -135,8 +144,101 @@ func (handler *Handler) requireProvider(next http.Handler) http.Handler {
 			writeError(writer, http.StatusForbidden, "PROVIDER_ROLE_REQUIRED", "a provider service identity is required")
 			return
 		}
-		next.ServeHTTP(writer, request.WithContext(withProviderPrincipal(request.Context(), principal)))
+		next.ServeHTTP(writer, request.WithContext(withPrincipal(request.Context(), principal)))
 	})
+}
+
+// requireInternal permite operações de carteira somente à identidade de serviço interno.
+func (handler *Handler) requireInternal(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		token, ok := bearerToken(request.Header.Get("Authorization"))
+		if !ok {
+			writer.Header().Set("WWW-Authenticate", "Bearer")
+			writeError(writer, http.StatusUnauthorized, "INVALID_TOKEN", "a valid Bearer token is required")
+			return
+		}
+		principal, err := handler.authenticator.Authenticate(request.Context(), token)
+		if err != nil {
+			handler.writeAuthenticationError(writer, err)
+			return
+		}
+		if principal.Role != auth.RoleInternal {
+			writeError(writer, http.StatusForbidden, "INTERNAL_ROLE_REQUIRED", "an internal service identity is required")
+			return
+		}
+		next.ServeHTTP(writer, request.WithContext(withPrincipal(request.Context(), principal)))
+	})
+}
+
+// writeAuthenticationError mantém os mesmos códigos nos dois tipos de rota protegida.
+func (handler *Handler) writeAuthenticationError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, auth.ErrInvalidToken):
+		writer.Header().Set("WWW-Authenticate", "Bearer")
+		writeError(writer, http.StatusUnauthorized, "INVALID_TOKEN", "the access token is inactive or invalid")
+	case errors.Is(err, auth.ErrUnauthorizedProvider):
+		writeError(writer, http.StatusForbidden, "UNAUTHORIZED_CLIENT", "the token client is not authorized")
+	default:
+		writeError(writer, http.StatusServiceUnavailable, "IDENTITY_PROVIDER_UNAVAILABLE", "token validation is temporarily unavailable")
+	}
+}
+
+// openWallet valida a entrada e delega a atomicidade ao caso de uso.
+func (handler *Handler) openWallet(writer http.ResponseWriter, request *http.Request) {
+	if !hasJSONContentType(request.Header.Get("Content-Type")) {
+		writeError(writer, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json")
+		return
+	}
+	var command application.OpenWalletCommand
+	if err := decodeJSON(writer, request, &command); err != nil {
+		writeError(writer, http.StatusBadRequest, "INVALID_JSON", "request body must contain one valid JSON object")
+		return
+	}
+	wallet, err := handler.wallets.Open(request.Context(), command)
+	if err != nil {
+		handler.writeWalletError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, walletResponseFromDomain(wallet))
+}
+
+// getWallet consulta uma carteira sem permitir acesso de provedores externos.
+func (handler *Handler) getWallet(writer http.ResponseWriter, request *http.Request) {
+	wallet, exists, err := handler.wallets.Get(request.Context(), request.PathValue("walletId"))
+	if err != nil {
+		handler.writeWalletError(writer, err)
+		return
+	}
+	if !exists {
+		writeError(writer, http.StatusNotFound, "WALLET_NOT_FOUND", "the wallet was not found")
+		return
+	}
+	writeJSON(writer, http.StatusOK, walletResponseFromDomain(wallet))
+}
+
+// writeWalletError traduz as falhas conhecidas sem revelar detalhes internos.
+func (handler *Handler) writeWalletError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, application.ErrInvalidWalletCommand):
+		writeError(writer, http.StatusBadRequest, "INVALID_WALLET", "wallet data is invalid")
+	case errors.Is(err, application.ErrWalletConflict):
+		writeError(writer, http.StatusConflict, "WALLET_ALREADY_EXISTS", "player and currency already have a wallet")
+	default:
+		writeError(writer, http.StatusServiceUnavailable, "WALLET_UNAVAILABLE", "the wallet operation could not be completed now")
+	}
+}
+
+// walletResponse mantém dinheiro como string no contrato externo.
+type walletResponse struct {
+	ID       string        `json:"id"`
+	PlayerID string        `json:"playerId"`
+	Balance  moneyResponse `json:"balance"`
+	Version  int64         `json:"version"`
+}
+
+func walletResponseFromDomain(wallet domain.Wallet) walletResponse {
+	return walletResponse{ID: wallet.ID(), PlayerID: wallet.PlayerID(),
+		Balance: moneyResponse{Amount: wallet.Balance().String(), Currency: wallet.Balance().Currency()}, Version: wallet.Version()}
 }
 
 // writeSubmitError traduz erros conhecidos sem expor detalhes internos do servidor.

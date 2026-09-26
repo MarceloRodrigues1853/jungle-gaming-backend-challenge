@@ -25,8 +25,8 @@ variáveis `HTTP_ADDRESS`, `DATABASE_URL`, `OIDC_INTROSPECTION_URL`,
 `OIDC_INTROSPECTION_CLIENT_ID`, `OIDC_INTROSPECTION_CLIENT_SECRET`,
 `PROVIDER_CLIENT_ID` e `PROVIDER_ID`.
 
-O cliente `wallet-internal`, reservado às futuras operações administrativas de
-carteira, usa o segredo local `wallet-internal-local-secret`. Tokens desse cliente não
+O cliente `wallet-internal`, reservado às operações administrativas de carteira, usa
+o segredo local `wallet-internal-local-secret`. Tokens desse cliente não
 são aceitos no endpoint de apostas, e tokens de `provider-a` não concedem papel interno.
 
 ## Health checks
@@ -57,6 +57,35 @@ client_secret provider-a-local-secret
 
 Copie somente o campo `access_token` da resposta. As credenciais são públicas e
 inseguras por projeto; devem ser usadas exclusivamente no ambiente local.
+
+Para testar abertura ou leitura de carteira, gere outro token com os mesmos campos,
+alterando somente estas credenciais:
+
+```text
+client_id     wallet-internal
+client_secret wallet-internal-local-secret
+```
+
+Use esse segundo `access_token` exclusivamente nas rotas `/wallets`.
+
+## Abertura e leitura de carteira
+
+Envie `POST http://127.0.0.1:8090/wallets` com `Authorization: Bearer
+<internal_access_token>`, `Content-Type: application/json` e o corpo:
+
+```json
+{
+  "playerId": "postman-player-1",
+  "initialBalance": {
+    "amount": "100.00",
+    "currency": "BRL"
+  }
+}
+```
+
+A resposta esperada é `201` com `id`, saldo textual e `version: 1`. Copie o campo `id`
+e consulte `GET http://127.0.0.1:8090/wallets/<id>` com o mesmo token interno; a resposta
+esperada é `200`. Uma segunda abertura para o mesmo `playerId` e moeda retorna `409`.
 
 ## Envio de uma aposta
 

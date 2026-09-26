@@ -34,6 +34,12 @@ func NewWallet(id, playerID, currency string, now time.Time) (Wallet, error) {
 	return RehydrateWallet(id, playerID, zero, 1, now, now)
 }
 
+// NewWalletWithBalance cria uma carteira já com o saldo de abertura e versão 1.
+// A abertura não usa Credit porque a primeira versão representa o estado inicial.
+func NewWalletWithBalance(id, playerID string, balance Money, now time.Time) (Wallet, error) {
+	return RehydrateWallet(id, playerID, balance, 1, now, now)
+}
+
 // RehydrateWallet reconstrói uma carteira persistida sem reaplicar movimentações.
 // A validação impede que dados inválidos do armazenamento entrem no domínio.
 func RehydrateWallet(id, playerID string, balance Money, version int64, createdAt, updatedAt time.Time) (Wallet, error) {
@@ -66,6 +72,9 @@ func (w Wallet) Version() int64 { return w.version }
 
 // UpdatedAt retorna o instante da última alteração persistida do agregado.
 func (w Wallet) UpdatedAt() time.Time { return w.updatedAt }
+
+// CreatedAt retorna o instante imutável de criação da carteira.
+func (w Wallet) CreatedAt() time.Time { return w.createdAt }
 
 // Credit credita um valor positivo e avança saldo, versão e instante de atualização.
 func (w *Wallet) Credit(amount Money, now time.Time) error {

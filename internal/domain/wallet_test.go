@@ -56,6 +56,20 @@ func TestWalletRejectsCurrencyMismatch(t *testing.T) {
 	}
 }
 
+// TestNewWalletWithBalanceKeepsInitialVersion valida a semântica da abertura.
+func TestNewWalletWithBalanceKeepsInitialVersion(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	balance, _ := ParseMoney("100.00", "BRL")
+	wallet, err := NewWalletWithBalance("wallet-1", "player-1", balance, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wallet.Balance().String() != "100.00" || wallet.Version() != 1 || !wallet.CreatedAt().Equal(now) {
+		t.Fatalf("wallet = %s/v%d/%s", wallet.Balance(), wallet.Version(), wallet.CreatedAt())
+	}
+}
+
 // TestLedgerEntryValidatesBalanceEquation valida a equação de saldo do lançamento.
 func TestLedgerEntryValidatesBalanceEquation(t *testing.T) {
 	t.Parallel()

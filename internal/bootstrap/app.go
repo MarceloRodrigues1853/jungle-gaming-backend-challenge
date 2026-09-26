@@ -26,6 +26,7 @@ func NewApp() *fx.App {
 			newIDGenerator,
 			newIntrospector,
 			newWagerService,
+			newWalletService,
 			newHTTPHandler,
 		),
 		fx.Invoke(registerHTTPServer),
@@ -83,7 +84,12 @@ func newWagerService(store *postgresstore.Store, ids application.IDGenerator) (*
 	return application.NewWagerService(store, store, ids, nil)
 }
 
+// newWalletService compõe a abertura e leitura de carteiras no mesmo Store.
+func newWalletService(store *postgresstore.Store, ids application.IDGenerator) (*application.WalletService, error) {
+	return application.NewWalletService(store, ids, nil)
+}
+
 // newHTTPHandler conecta os adaptadores concretos ao contrato HTTP.
-func newHTTPHandler(introspector *auth.Introspector, wagers *application.WagerService, store *postgresstore.Store) (http.Handler, error) {
-	return httpapi.NewHandler(introspector, wagers, store)
+func newHTTPHandler(introspector *auth.Introspector, wagers *application.WagerService, wallets *application.WalletService, store *postgresstore.Store) (http.Handler, error) {
+	return httpapi.NewHandler(introspector, wagers, wallets, store)
 }

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/application"
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/auth"
@@ -124,11 +125,60 @@ func TestSubmitWagerRejectsAmbiguousJSON(t *testing.T) {
 	}
 }
 
+// TestWalletRoutesRequireInternalIdentity impede que provedores administrem carteiras.
+func TestWalletRoutesRequireInternalIdentity(t *testing.T) {
+	t.Parallel()
+	manager := &walletManagerStub{}
+	handler, err := NewHandler(&authenticatorStub{principal: auth.Principal{Role: auth.RoleProvider, ProviderID: "provider-a"}}, &submitterSpy{}, manager, readinessStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/wallets", strings.NewReader(`{"playerId":"player-1","initialBalance":{"amount":"100.00","currency":"BRL"}}`))
+	request.Header.Set("Authorization", "Bearer provider-token")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	assertErrorCode(t, response, "INTERNAL_ROLE_REQUIRED")
+}
+
+// TestOpenAndGetWalletExposeExactMoney cobre os contratos internos de escrita e leitura.
+func TestOpenAndGetWalletExposeExactMoney(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	balance, _ := domain.ParseMoney("100.00", "BRL")
+	wallet, _ := domain.NewWalletWithBalance("wallet-1", "player-1", balance, now)
+	manager := &walletManagerStub{wallet: wallet, exists: true}
+	handler, err := NewHandler(&authenticatorStub{principal: auth.Principal{Role: auth.RoleInternal}}, &submitterSpy{}, manager, readinessStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	open := httptest.NewRequest(http.MethodPost, "/wallets", strings.NewReader(`{"playerId":"player-1","initialBalance":{"amount":"100.00","currency":"BRL"}}`))
+	open.Header.Set("Authorization", "Bearer internal-token")
+	open.Header.Set("Content-Type", "application/json")
+	openResponse := httptest.NewRecorder()
+	handler.ServeHTTP(openResponse, open)
+	if openResponse.Code != http.StatusCreated || !strings.Contains(openResponse.Body.String(), `"amount":"100.00"`) {
+		t.Fatalf("open status/body = %d/%s", openResponse.Code, openResponse.Body.String())
+	}
+
+	get := httptest.NewRequest(http.MethodGet, "/wallets/wallet-1", nil)
+	get.Header.Set("Authorization", "Bearer internal-token")
+	getResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getResponse, get)
+	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"version":1`) {
+		t.Fatalf("get status/body = %d/%s", getResponse.Code, getResponse.Body.String())
+	}
+}
+
 // TestHealthChecksArePublicAndReadinessUsesPostgres separa vida do processo de prontidão.
 func TestHealthChecksArePublicAndReadinessUsesPostgres(t *testing.T) {
 	t.Parallel()
 
-	liveHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, readinessStub{})
+	liveHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, &walletManagerStub{}, readinessStub{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +188,7 @@ func TestHealthChecksArePublicAndReadinessUsesPostgres(t *testing.T) {
 		t.Fatalf("liveness status = %d", live.Code)
 	}
 
-	unreadyHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, readinessStub{err: errors.New("postgres unavailable")})
+	unreadyHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, &walletManagerStub{}, readinessStub{err: errors.New("postgres unavailable")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,6 +219,23 @@ type submitterSpy struct {
 	err            error
 }
 
+// walletManagerStub isola as rotas de carteira nos testes do adaptador HTTP.
+type walletManagerStub struct {
+	wallet domain.Wallet
+	exists bool
+	err    error
+	opened bool
+}
+
+func (stub *walletManagerStub) Open(context.Context, application.OpenWalletCommand) (domain.Wallet, error) {
+	stub.opened = true
+	return stub.wallet, stub.err
+}
+
+func (stub *walletManagerStub) Get(context.Context, string) (domain.Wallet, bool, error) {
+	return stub.wallet, stub.exists, stub.err
+}
+
 func (spy *submitterSpy) Submit(_ context.Context, providerID, idempotencyKey string, command application.SubmitWagerCommand) (domain.WagerProcessingResult, error) {
 	spy.called, spy.providerID, spy.idempotencyKey, spy.command = true, providerID, idempotencyKey, command
 	return spy.result, spy.err
@@ -177,7 +244,7 @@ func (spy *submitterSpy) Submit(_ context.Context, providerID, idempotencyKey st
 // testHandler falha imediatamente se as dependências do roteador forem inválidas.
 func testHandler(t *testing.T, authenticator Authenticator, submitter WagerSubmitter) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(authenticator, submitter, readinessStub{})
+	handler, err := NewHandler(authenticator, submitter, &walletManagerStub{}, readinessStub{})
 	if err != nil {
 		t.Fatal(err)
 	}

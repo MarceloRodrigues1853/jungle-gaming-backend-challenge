@@ -122,8 +122,9 @@ timestamps e metadados de HTTP/SQS ficam fora do hash. Assim, o mesmo conteúdo 
 negócio gera os mesmos 32 bytes nos dois transportes, enquanto provedores ou conteúdos
 diferentes não compartilham identidade.
 
-Ainda não há publicação de outbox nesta operação; o registro atômico dos eventos será
-adicionado antes de expor os fluxos HTTP/SQS.
+Ainda não há registro de outbox nas operações externas de aposta; ele será adicionado
+antes da integração HTTP/SQS ser considerada completa. A abertura positiva de carteira
+já grava seus dois eventos na outbox no mesmo commit financeiro.
 
 ### Identidade de provedores
 
@@ -140,8 +141,21 @@ O adaptador `internal/httpapi` protege `POST /wagering/transactions` com Bearer 
 introspecta a credencial e injeta o principal validado no contexto. O `providerId` do
 JSON precisa coincidir com esse principal antes de o caso de uso ser chamado; ele nunca
 é aceito isoladamente como prova de identidade. Um token interno é recusado nessa rota,
-mesmo sendo válido. As futuras rotas administrativas de carteira exigirão o papel
+mesmo sendo válido. `POST /wallets` e `GET /wallets/{walletId}` exigem o papel
 `INTERNAL`, impedindo que tokens de provedores sejam reutilizados para essa finalidade.
+
+### Abertura e leitura de carteira
+
+`POST /wallets` cria uma única carteira por `(playerId, currency)`. Saldo inicial zero
+persiste somente a carteira. Saldo positivo persiste carteira, `OPENING` processada,
+lançamento de crédito e os eventos `WagerTransactionProcessed` e
+`WalletBalanceChanged` na outbox dentro de uma única transação PostgreSQL. A carteira
+nasce com versão 1 nos dois casos. A constraint única do banco transforma uma segunda
+abertura para o mesmo jogador e moeda em conflito HTTP `409`.
+
+`GET /wallets/{walletId}` reidrata o agregado sem reaplicar movimentos e devolve valor
+monetário como string. Carteira ausente retorna `404`. As duas rotas usam o mesmo limite
+de autenticação interna e nunca aceitam um token de provedor.
 
 ### Contrato HTTP de operações
 
@@ -166,8 +180,8 @@ não estiver disponível. A prontidão de SQS será incorporada quando o consumi
 ## Próximas decisões e trabalho pendente
 
 Ainda estão pendentes a retomada de referências pendentes com retry e expiração,
-mapeamento de conflitos de reversão para códigos de rejeição, inbox/outbox, autorização
-de operações internas, demais rotas da API HTTP, consumidor SQS, métricas adicionais,
+mapeamento de conflitos de reversão para códigos de rejeição, inbox e outbox das
+operações externas, demais rotas da API HTTP, consumidor SQS, métricas adicionais,
 Dockerfile e testes de concorrência
 distribuída com pelo menos três processos independentes. Os testes PostgreSQL locais já
 cobrem replay e operações simultâneas, mas não substituem esse cenário multi-processo.
