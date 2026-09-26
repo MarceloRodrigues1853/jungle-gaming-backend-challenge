@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -124,44 +123,21 @@ func (service *WalletService) openingArtifacts(wallet domain.Wallet, now time.Ti
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("create opening ledger: %w", err)
 	}
-	events, err := service.openingEvents(wallet, transaction, now)
+	transactionEventID, err := service.ids.NewID()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("generate opening transaction event id: %w", err)
+	}
+	balanceEventID, err := service.ids.NewID()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("generate opening balance event id: %w", err)
+	}
+	result := domain.WagerProcessingResult{
+		TransactionID: transaction.ID(), Status: transaction.Status(), Balance: wallet.Balance(),
+		HasBalance: true, WalletVersion: wallet.Version(), LedgerEntry: &entry,
+	}
+	events, err := BuildWagerOutboxEvents(transaction, result, WagerEventIDs{Transaction: transactionEventID, WalletBalance: balanceEventID}, now)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("create opening events: %w", err)
 	}
 	return &transaction, &entry, events, nil
-}
-
-// openingEvents usa JSON determinístico e IDs estáveis gerados antes da transação SQL.
-func (service *WalletService) openingEvents(wallet domain.Wallet, transaction domain.WagerTransaction, now time.Time) ([]OutboxEvent, error) {
-	types := []string{"WagerTransactionProcessed", "WalletBalanceChanged"}
-	events := make([]OutboxEvent, 0, len(types))
-	for _, eventType := range types {
-		eventID, err := service.ids.NewID()
-		if err != nil {
-			return nil, fmt.Errorf("generate outbox event id: %w", err)
-		}
-		payload, err := json.Marshal(openingEventPayload{
-			EventID: eventID, Type: eventType, WalletID: wallet.ID(), PlayerID: wallet.PlayerID(),
-			TransactionID: transaction.ID(), Amount: wallet.Balance().String(),
-			Currency: wallet.Balance().Currency(), Version: wallet.Version(), OccurredAt: now,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("encode opening event: %w", err)
-		}
-		events = append(events, OutboxEvent{ID: eventID, AggregateID: wallet.ID(), Type: eventType, Payload: payload, OccurredAt: now})
-	}
-	return events, nil
-}
-
-// openingEventPayload mantém o contrato do evento explícito e revisável.
-type openingEventPayload struct {
-	EventID       string    `json:"eventId"`
-	Type          string    `json:"type"`
-	WalletID      string    `json:"walletId"`
-	PlayerID      string    `json:"playerId"`
-	TransactionID string    `json:"transactionId"`
-	Amount        string    `json:"amount"`
-	Currency      string    `json:"currency"`
-	Version       int64     `json:"version"`
-	OccurredAt    time.Time `json:"occurredAt"`
 }

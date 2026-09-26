@@ -45,7 +45,7 @@ type SubmitWagerCommand struct {
 
 // TransactionProcessor persiste e processa a operação financeira atomicamente.
 type TransactionProcessor interface {
-	ProcessWagerTransaction(context.Context, domain.WagerTransaction, *domain.WagerTransaction, string, time.Time) (domain.WagerProcessingResult, error)
+	ProcessWagerTransaction(context.Context, domain.WagerTransaction, *domain.WagerTransaction, string, WagerEventIDs, time.Time) (domain.WagerProcessingResult, error)
 }
 
 // ReferenceFinder localiza uma operação já persistida no mesmo provedor.
@@ -142,7 +142,16 @@ func (service *WagerService) Submit(ctx context.Context, providerID, idempotency
 			return domain.WagerProcessingResult{}, fmt.Errorf("generate ledger entry id: %w", err)
 		}
 	}
-	return service.processor.ProcessWagerTransaction(ctx, transaction, reference, ledgerEntryID, now)
+	transactionEventID, err := service.ids.NewID()
+	if err != nil {
+		return domain.WagerProcessingResult{}, fmt.Errorf("generate transaction event id: %w", err)
+	}
+	balanceEventID, err := service.ids.NewID()
+	if err != nil {
+		return domain.WagerProcessingResult{}, fmt.Errorf("generate balance event id: %w", err)
+	}
+	return service.processor.ProcessWagerTransaction(ctx, transaction, reference, ledgerEntryID,
+		WagerEventIDs{Transaction: transactionEventID, WalletBalance: balanceEventID}, now)
 }
 
 // HashWagerPayload gera SHA-256 sobre JSON canônico com todos os campos de negócio.

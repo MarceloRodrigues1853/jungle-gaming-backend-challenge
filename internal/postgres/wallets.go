@@ -43,12 +43,8 @@ func (store *Store) CreateWallet(ctx context.Context, wallet domain.Wallet, open
 		if err := insertLedgerEntry(ctx, dbtx, *ledger); err != nil {
 			return err
 		}
-		for _, event := range events {
-			if _, err := dbtx.Exec(ctx, `INSERT INTO outbox_events
-				(event_id, aggregate_id, event_type, payload, occurred_at, next_attempt_at)
-				VALUES ($1, $2, $3, $4, $5, $5)`, event.ID, event.AggregateID, event.Type, event.Payload, event.OccurredAt); err != nil {
-				return fmt.Errorf("insert opening outbox event: %w", err)
-			}
+		if err := insertOutboxEvents(ctx, dbtx, events); err != nil {
+			return err
 		}
 	} else if ledger != nil || len(events) != 0 {
 		return errors.New("zero opening cannot contain financial artifacts")

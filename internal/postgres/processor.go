@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/application"
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/domain"
 	"github.com/jackc/pgx/v5"
 )
@@ -21,7 +22,7 @@ type persistedIdentity struct {
 
 // ProcessWagerTransaction grava a transação, o saldo e o ledger no mesmo commit SQL.
 // O lock fica restrito à carteira afetada, permitindo paralelismo entre carteiras distintas.
-func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction domain.WagerTransaction, reference *domain.WagerTransaction, ledgerEntryID string, now time.Time) (domain.WagerProcessingResult, error) {
+func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction domain.WagerTransaction, reference *domain.WagerTransaction, ledgerEntryID string, eventIDs application.WagerEventIDs, now time.Time) (domain.WagerProcessingResult, error) {
 	if store == nil || store.pool == nil {
 		return domain.WagerProcessingResult{}, errors.New("postgres store is not initialized")
 	}
@@ -75,10 +76,29 @@ func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction dom
 	if err := persistTransactionResult(ctx, dbtx, transaction); err != nil {
 		return domain.WagerProcessingResult{}, err
 	}
+	events, err := application.BuildWagerOutboxEvents(transaction, result, eventIDs, now)
+	if err != nil {
+		return domain.WagerProcessingResult{}, fmt.Errorf("build wager outbox events: %w", err)
+	}
+	if err := insertOutboxEvents(ctx, dbtx, events); err != nil {
+		return domain.WagerProcessingResult{}, err
+	}
 	if err := dbtx.Commit(ctx); err != nil {
 		return domain.WagerProcessingResult{}, fmt.Errorf("commit financial transaction: %w", err)
 	}
 	return result, nil
+}
+
+// insertOutboxEvents grava snapshots que só ficarão visíveis após o commit financeiro.
+func insertOutboxEvents(ctx context.Context, tx pgx.Tx, events []application.OutboxEvent) error {
+	for _, event := range events {
+		if _, err := tx.Exec(ctx, `INSERT INTO outbox_events
+			(event_id, aggregate_id, event_type, payload, occurred_at, next_attempt_at)
+			VALUES ($1, $2, $3, $4, $5, $5)`, event.ID, event.AggregateID, event.Type, event.Payload, event.OccurredAt); err != nil {
+			return fmt.Errorf("insert outbox event: %w", err)
+		}
+	}
+	return nil
 }
 
 // lockWallet bloqueia apenas a linha da carteira e reidrata seu estado persistido.

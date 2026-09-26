@@ -122,9 +122,16 @@ timestamps e metadados de HTTP/SQS ficam fora do hash. Assim, o mesmo conteúdo 
 negócio gera os mesmos 32 bytes nos dois transportes, enquanto provedores ou conteúdos
 diferentes não compartilham identidade.
 
-Ainda não há registro de outbox nas operações externas de aposta; ele será adicionado
-antes da integração HTTP/SQS ser considerada completa. A abertura positiva de carteira
-já grava seus dois eventos na outbox no mesmo commit financeiro.
+Operações externas processadas ou rejeitadas gravam um snapshot do resultado na outbox
+no mesmo commit financeiro. Movimentações confirmadas também gravam
+`WalletBalanceChanged`; `LOSS` e rejeições não criam esse segundo evento. Replays
+idempotentes devolvem o resultado já persistido sem duplicar eventos. A abertura
+positiva de carteira usa o mesmo contrato e grava seus dois eventos no commit inicial.
+
+Os envelopes possuem `eventId`, `eventType`, `aggregateId`, `correlationId`,
+`occurredAt`, versão `1` e `data` tipado. Valores monetários continuam representados
+como strings. Esses registros ainda não significam publicação: um worker separado
+será responsável pelo envio e pela confirmação em `published_at`.
 
 ### Identidade de provedores
 
@@ -180,8 +187,8 @@ não estiver disponível. A prontidão de SQS será incorporada quando o consumi
 ## Próximas decisões e trabalho pendente
 
 Ainda estão pendentes a retomada de referências pendentes com retry e expiração,
-mapeamento de conflitos de reversão para códigos de rejeição, inbox e outbox das
-operações externas, demais rotas da API HTTP, consumidor SQS, métricas adicionais,
+mapeamento de conflitos de reversão para códigos de rejeição, inbox, publicador da
+outbox, demais rotas da API HTTP, consumidor SQS, métricas adicionais,
 Dockerfile e testes de concorrência
 distribuída com pelo menos três processos independentes. Os testes PostgreSQL locais já
 cobrem replay e operações simultâneas, mas não substituem esse cenário multi-processo.

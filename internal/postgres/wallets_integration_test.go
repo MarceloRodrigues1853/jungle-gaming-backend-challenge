@@ -31,7 +31,7 @@ func TestPostgresWalletOpeningPersistsAllArtifactsAtomically(t *testing.T) {
 	err = pool.QueryRow(context.Background(), `SELECT
 		(SELECT count(*) FROM wager_transactions WHERE wallet_id = $1 AND kind = 'OPENING'),
 		(SELECT count(*) FROM wallet_ledger_entries WHERE wallet_id = $1),
-		(SELECT count(*) FROM outbox_events WHERE aggregate_id = $1)`, wallet.ID()).Scan(&openingCount, &ledgerCount, &outboxCount)
+		(SELECT count(*) FROM outbox_events WHERE payload -> 'data' ->> 'walletId' = $1)`, wallet.ID()).Scan(&openingCount, &ledgerCount, &outboxCount)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestPostgresZeroWalletDoesNotPersistOpeningArtifacts(t *testing.T) {
 	if err := pool.QueryRow(context.Background(), `SELECT
 		(SELECT count(*) FROM wager_transactions WHERE wallet_id = $1) +
 		(SELECT count(*) FROM wallet_ledger_entries WHERE wallet_id = $1) +
-		(SELECT count(*) FROM outbox_events WHERE aggregate_id = $1)`, wallet.ID()).Scan(&artifacts); err != nil {
+		(SELECT count(*) FROM outbox_events WHERE payload -> 'data' ->> 'walletId' = $1)`, wallet.ID()).Scan(&artifacts); err != nil {
 		t.Fatal(err)
 	}
 	if artifacts != 0 {

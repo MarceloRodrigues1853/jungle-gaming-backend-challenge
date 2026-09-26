@@ -36,13 +36,13 @@ func TestSubmitBuildsTheSamePayloadForHTTPAndSQS(t *testing.T) {
 
 	command := validSubmitCommand()
 	firstProcessor := &processorSpy{}
-	first := newTestWagerService(t, firstProcessor, &sequenceIDs{values: []string{"tx-http", "ledger-http"}})
+	first := newTestWagerService(t, firstProcessor, &sequenceIDs{values: []string{"tx-http", "ledger-http", "event-http", "balance-http"}})
 	if _, err := first.Submit(context.Background(), "provider-a", "key-from-http", command); err != nil {
 		t.Fatalf("HTTP-like Submit() error = %v", err)
 	}
 
 	secondProcessor := &processorSpy{}
-	second := newTestWagerService(t, secondProcessor, &sequenceIDs{values: []string{"tx-sqs", "ledger-sqs"}})
+	second := newTestWagerService(t, secondProcessor, &sequenceIDs{values: []string{"tx-sqs", "ledger-sqs", "event-sqs", "balance-sqs"}})
 	if _, err := second.Submit(context.Background(), "provider-a", "key-from-sqs", command); err != nil {
 		t.Fatalf("SQS-like Submit() error = %v", err)
 	}
@@ -118,7 +118,7 @@ func TestSubmitResolvesReferenceWithinAuthenticatedProvider(t *testing.T) {
 	reference := processedReference(t, command)
 	finder := &referenceSpy{transaction: reference}
 	processor := &processorSpy{}
-	service, err := NewWagerService(processor, finder, &sequenceIDs{values: []string{"refund-id", "refund-ledger"}}, fixedClock)
+	service, err := NewWagerService(processor, finder, &sequenceIDs{values: []string{"refund-id", "refund-ledger", "refund-event", "refund-balance-event"}}, fixedClock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,10 +159,11 @@ type processorSpy struct {
 	transaction domain.WagerTransaction
 	reference   *domain.WagerTransaction
 	ledgerID    string
+	eventIDs    WagerEventIDs
 }
 
-func (spy *processorSpy) ProcessWagerTransaction(_ context.Context, transaction domain.WagerTransaction, reference *domain.WagerTransaction, ledgerID string, _ time.Time) (domain.WagerProcessingResult, error) {
-	spy.called, spy.transaction, spy.reference, spy.ledgerID = true, transaction, reference, ledgerID
+func (spy *processorSpy) ProcessWagerTransaction(_ context.Context, transaction domain.WagerTransaction, reference *domain.WagerTransaction, ledgerID string, eventIDs WagerEventIDs, _ time.Time) (domain.WagerProcessingResult, error) {
+	spy.called, spy.transaction, spy.reference, spy.ledgerID, spy.eventIDs = true, transaction, reference, ledgerID, eventIDs
 	return domain.WagerProcessingResult{TransactionID: transaction.ID()}, nil
 }
 
