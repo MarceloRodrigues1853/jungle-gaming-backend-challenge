@@ -9,7 +9,7 @@ permite apenas uma reversão bem-sucedida por transação referenciada. O valor 
 Inicie o PostgreSQL local pela raiz do projeto:
 
 ```sh
-docker compose up -d postgres
+docker compose up -d postgres keycloak
 docker compose ps
 ```
 
@@ -19,6 +19,12 @@ O serviço publica a porta somente em `127.0.0.1:5432`, persiste os dados no vol
 se preferir outra credencial. Para parar sem apagar os dados, use
 `docker compose down`; não use `docker compose down -v` a menos que queira remover o
 volume e todos os dados locais.
+
+O Keycloak local fica disponível em `http://localhost:8080`, com realm importado
+`jungle-dev`, usuário administrativo `admin` e senha `local_admin_only`. O cliente
+`provider-a` usa `provider-a-local-secret` para obter tokens de teste; `jungle-api`
+usa `jungle-api-introspection-secret` para introspecção. Esses valores são públicos e
+inseguros por projeto: use-os somente no ambiente local de desenvolvimento.
 
 As migrations também podem ser aplicadas sem instalar `psql` no host, usando o cliente
 que vem no container:

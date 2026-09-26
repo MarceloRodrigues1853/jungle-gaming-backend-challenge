@@ -16,5 +16,16 @@ services:
       retries: 10
       start_period: 5s
 
+  keycloak:
+    image: keycloak/keycloak:26.7.4-0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-local_admin_only}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+
 volumes:
   postgres_data:

@@ -104,13 +104,28 @@ bytes para o mesmo conteúdo de negócio.
 Ainda não há publicação de outbox nesta operação; o registro atômico dos eventos será
 adicionado antes de expor os fluxos HTTP/SQS.
 
+### Identidade de provedores
+
+O ambiente local usa Keycloak em modo de desenvolvimento, com o realm `jungle-dev` e
+clientes de serviço para obter e introspectar tokens via `client_credentials`. O pacote
+`internal/auth` consulta o endpoint de introspecção com credenciais de cliente
+confidencial, aceita apenas tokens ativos e mapeia `client_id` por uma allowlist
+explícita para o `providerId` interno. Assim, o provedor não deve ser confiado a partir
+do corpo HTTP. As credenciais do realm importado são apenas de desenvolvimento local.
+
+A API ainda não foi criada e o introspector ainda não está ligado a middleware; portanto,
+nenhuma rota financeira está exposta nesta etapa. O próximo passo HTTP deve exigir esse
+principal antes de chamar os casos de uso, e operações internas de carteira precisarão
+de uma permissão/client separado.
+
 ## Próximas decisões e trabalho pendente
 
 Ainda estão pendentes a canonicalização comum do payload entre HTTP/SQS, retomada de
 referências pendentes com retry e expiração, mapeamento de conflitos de reversão para
-códigos de rejeição, inbox/outbox, autenticação e isolamento por provedor, composição
-e lifecycle com Uber Fx, API HTTP, consumidor SQS, métricas, logs estruturados, Dockerfile
-e testes de concorrência distribuída com pelo menos três processos independentes. Os
-testes PostgreSQL locais já cobrem replay e operações simultâneas, mas não substituem
-esse cenário multi-processo. As estratégias para esses pontos serão documentadas junto
-com cada etapa, antes de serem apresentadas como garantias da solução.
+códigos de rejeição, inbox/outbox, middleware HTTP de autenticação e isolamento por
+provedor, autorização de operações internas, composição e lifecycle com Uber Fx, API
+HTTP, consumidor SQS, métricas, logs estruturados, Dockerfile e testes de concorrência
+distribuída com pelo menos três processos independentes. Os testes PostgreSQL locais já
+cobrem replay e operações simultâneas, mas não substituem esse cenário multi-processo.
+As estratégias para esses pontos serão documentadas junto com cada etapa, antes de serem
+apresentadas como garantias da solução.
