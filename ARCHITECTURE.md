@@ -149,16 +149,23 @@ retornam `202`. Entrada inválida usa `400`, divergência de identidade usa `403
 de idempotência ou referência ausente usa `409`, carteira inexistente usa `404` e
 indisponibilidade transitória usa `503`. Os erros têm envelope JSON e código estável.
 
-Nesta etapa existe o adaptador testado, mas ainda não há um binário escutando uma porta.
-A composição por Uber Fx e o servidor com shutdown gracioso serão a próxima integração;
-até lá, o endpoint não está disponível externamente para Postman.
+O binário `cmd/api` compõe configuração, pool PostgreSQL, repositórios, autenticação,
+casos de uso, handlers e servidor usando `fx.Provide` e `fx.Invoke`. O pool é validado
+no `OnStart`; depois o servidor abre sua porta. No `OnStop`, a ordem inversa encerra o
+HTTP graciosamente antes de fechar o pool. O servidor configura prazos de leitura,
+escrita, cabeçalhos e conexões ociosas. Instruções de Postman estão em
+`docs/LOCAL_DEVELOPMENT.md`.
+
+`GET /health/live` confirma somente que o processo HTTP responde. `GET /health/ready`
+usa prazo de dois segundos para consultar o PostgreSQL e devolve `503` se a dependência
+não estiver disponível. A prontidão de SQS será incorporada quando o consumidor existir.
 
 ## Próximas decisões e trabalho pendente
 
 Ainda estão pendentes a retomada de referências pendentes com retry e expiração,
 mapeamento de conflitos de reversão para códigos de rejeição, inbox/outbox, autorização
-de operações internas, composição e lifecycle com Uber Fx, demais rotas da API HTTP,
-consumidor SQS, métricas, logs estruturados, Dockerfile e testes de concorrência
+de operações internas, demais rotas da API HTTP, consumidor SQS, métricas adicionais,
+Dockerfile e testes de concorrência
 distribuída com pelo menos três processos independentes. Os testes PostgreSQL locais já
 cobrem replay e operações simultâneas, mas não substituem esse cenário multi-processo.
 As estratégias para esses pontos serão documentadas junto com cada etapa, antes de serem

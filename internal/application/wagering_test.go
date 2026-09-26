@@ -183,10 +183,10 @@ type sequenceIDs struct {
 	next   int
 }
 
-func (generator *sequenceIDs) NewID() string {
+func (generator *sequenceIDs) NewID() (string, error) {
 	value := generator.values[generator.next]
 	generator.next++
-	return value
+	return value, nil
 }
 
 // newTestWagerService cria o serviço com relógio determinístico.

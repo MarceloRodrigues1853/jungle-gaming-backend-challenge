@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/application"
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/auth"
@@ -27,21 +28,50 @@ type WagerSubmitter interface {
 	Submit(context.Context, string, string, application.SubmitWagerCommand) (domain.WagerProcessingResult, error)
 }
 
+// Readiness verifica se a dependência necessária para aceitar trabalho está disponível.
+type Readiness interface {
+	Ping(context.Context) error
+}
+
 // Handler agrupa as dependências dos endpoints financeiros.
 type Handler struct {
 	authenticator Authenticator
 	wagers        WagerSubmitter
+	readiness     Readiness
 }
 
 // NewHandler cria as rotas e aplica autenticação antes dos endpoints protegidos.
-func NewHandler(authenticator Authenticator, wagers WagerSubmitter) (http.Handler, error) {
-	if authenticator == nil || wagers == nil {
-		return nil, errors.New("HTTP authenticator and wager service are required")
+func NewHandler(authenticator Authenticator, wagers WagerSubmitter, readiness Readiness) (http.Handler, error) {
+	if authenticator == nil || wagers == nil || readiness == nil {
+		return nil, errors.New("HTTP authenticator, wager service, and readiness are required")
 	}
-	handler := &Handler{authenticator: authenticator, wagers: wagers}
+	handler := &Handler{authenticator: authenticator, wagers: wagers, readiness: readiness}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health/live", handler.live)
+	mux.HandleFunc("GET /health/ready", handler.ready)
 	mux.Handle("POST /wagering/transactions", handler.requireProvider(http.HandlerFunc(handler.submitWager)))
 	return mux, nil
+}
+
+// live informa somente que o processo HTTP está em execução.
+func (handler *Handler) live(writer http.ResponseWriter, _ *http.Request) {
+	writeJSON(writer, http.StatusOK, healthResponse{Status: "ok"})
+}
+
+// ready confirma o PostgreSQL com prazo curto antes de aceitar tráfego financeiro.
+func (handler *Handler) ready(writer http.ResponseWriter, request *http.Request) {
+	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
+	defer cancel()
+	if err := handler.readiness.Ping(ctx); err != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, healthResponse{Status: "unavailable"})
+		return
+	}
+	writeJSON(writer, http.StatusOK, healthResponse{Status: "ready"})
+}
+
+// healthResponse mantém os health checks pequenos e estáveis.
+type healthResponse struct {
+	Status string `json:"status"`
 }
 
 // submitWager valida o contrato HTTP e delega a regra ao caso de uso.

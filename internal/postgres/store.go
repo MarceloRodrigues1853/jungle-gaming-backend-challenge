@@ -21,6 +21,14 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+// Ping confirma que o PostgreSQL aceita consultas para o readiness check.
+func (store *Store) Ping(ctx context.Context) error {
+	if store == nil || store.pool == nil {
+		return errors.New("postgres store is not initialized")
+	}
+	return store.pool.Ping(ctx)
+}
+
 // NewStore cria o adaptador a partir de um pool já configurado e validado.
 func NewStore(pool *pgxpool.Pool) (*Store, error) {
 	if pool == nil {

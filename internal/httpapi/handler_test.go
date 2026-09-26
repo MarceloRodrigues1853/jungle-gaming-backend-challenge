@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -123,6 +124,31 @@ func TestSubmitWagerRejectsAmbiguousJSON(t *testing.T) {
 	}
 }
 
+// TestHealthChecksArePublicAndReadinessUsesPostgres separa vida do processo de prontidão.
+func TestHealthChecksArePublicAndReadinessUsesPostgres(t *testing.T) {
+	t.Parallel()
+
+	liveHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, readinessStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := httptest.NewRecorder()
+	liveHandler.ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/health/live", nil))
+	if live.Code != http.StatusOK {
+		t.Fatalf("liveness status = %d", live.Code)
+	}
+
+	unreadyHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, readinessStub{err: errors.New("postgres unavailable")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := httptest.NewRecorder()
+	unreadyHandler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if ready.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, body = %s", ready.Code, ready.Body.String())
+	}
+}
+
 // authenticatorStub controla a identidade devolvida ao middleware.
 type authenticatorStub struct {
 	principal auth.Principal
@@ -151,12 +177,17 @@ func (spy *submitterSpy) Submit(_ context.Context, providerID, idempotencyKey st
 // testHandler falha imediatamente se as dependências do roteador forem inválidas.
 func testHandler(t *testing.T, authenticator Authenticator, submitter WagerSubmitter) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(authenticator, submitter)
+	handler, err := NewHandler(authenticator, submitter, readinessStub{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return handler
 }
+
+// readinessStub representa PostgreSQL disponível nos testes de contrato HTTP.
+type readinessStub struct{ err error }
+
+func (stub readinessStub) Ping(context.Context) error { return stub.err }
 
 // performWagerRequest monta uma requisição equivalente à futura chamada do Postman.
 func performWagerRequest(handler http.Handler, authorization, idempotencyKey, body string) *httptest.ResponseRecorder {

@@ -55,7 +55,7 @@ type ReferenceFinder interface {
 
 // IDGenerator produz identificadores internos sem acoplar o caso de uso a uma biblioteca.
 type IDGenerator interface {
-	NewID() string
+	NewID() (string, error)
 }
 
 // WagerService prepara a entrada comum e delega a atomicidade ao processador persistente.
@@ -102,8 +102,12 @@ func (service *WagerService) Submit(ctx context.Context, providerID, idempotency
 	}
 
 	now := service.clock().UTC()
+	transactionID, err := service.ids.NewID()
+	if err != nil {
+		return domain.WagerProcessingResult{}, fmt.Errorf("generate transaction id: %w", err)
+	}
 	transaction, err := domain.NewExternalTransaction(domain.ExternalTransactionInput{
-		ID: service.ids.NewID(), ProviderID: providerID,
+		ID: transactionID, ProviderID: providerID,
 		ExternalTransactionID: command.ExternalTransactionID, IdempotencyKey: idempotencyKey,
 		PayloadHash: payloadHash[:], WalletID: command.WalletID, PlayerID: command.PlayerID,
 		RoundID: command.RoundID, GameID: command.GameID, Kind: domain.TransactionKind(command.Kind),
@@ -133,7 +137,10 @@ func (service *WagerService) Submit(ctx context.Context, providerID, idempotency
 
 	ledgerEntryID := ""
 	if transaction.Kind() != domain.TransactionLoss {
-		ledgerEntryID = service.ids.NewID()
+		ledgerEntryID, err = service.ids.NewID()
+		if err != nil {
+			return domain.WagerProcessingResult{}, fmt.Errorf("generate ledger entry id: %w", err)
+		}
 	}
 	return service.processor.ProcessWagerTransaction(ctx, transaction, reference, ledgerEntryID, now)
 }
