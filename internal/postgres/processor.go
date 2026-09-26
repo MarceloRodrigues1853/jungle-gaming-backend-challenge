@@ -26,8 +26,8 @@ func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction dom
 	if store == nil || store.pool == nil {
 		return domain.WagerProcessingResult{}, errors.New("postgres store is not initialized")
 	}
-	if transaction.Status() != domain.TransactionPending {
-		return domain.WagerProcessingResult{}, fmt.Errorf("transaction must be pending before persistence")
+	if transaction.Status() != domain.TransactionPending && transaction.Status() != domain.TransactionPendingReference {
+		return domain.WagerProcessingResult{}, fmt.Errorf("transaction must be pending or pending reference before persistence")
 	}
 
 	dbtx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
@@ -42,11 +42,6 @@ func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction dom
 		}
 	}
 
-	wallet, err := lockWallet(ctx, dbtx, transaction.WalletID(), transaction.PlayerID(), transaction.Money().Currency())
-	if err != nil {
-		return domain.WagerProcessingResult{}, err
-	}
-	initialWalletVersion := wallet.Version()
 	inserted, err := insertPendingTransaction(ctx, dbtx, transaction)
 	if err != nil {
 		return domain.WagerProcessingResult{}, err
@@ -66,6 +61,31 @@ func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction dom
 		}
 		return result, nil
 	}
+	if transaction.Status() == domain.TransactionPendingReference {
+		result := domain.WagerProcessingResult{TransactionID: transaction.ID(), Status: domain.TransactionPendingReference}
+		events, err := application.BuildWagerOutboxEvents(transaction, result, eventIDs, now)
+		if err != nil {
+			return domain.WagerProcessingResult{}, fmt.Errorf("build pending reference event: %w", err)
+		}
+		if err := insertOutboxEvents(ctx, dbtx, events); err != nil {
+			return domain.WagerProcessingResult{}, err
+		}
+		if delivery != nil {
+			if err := completeInboxDelivery(ctx, dbtx, *delivery, now); err != nil {
+				return domain.WagerProcessingResult{}, err
+			}
+		}
+		if err := dbtx.Commit(ctx); err != nil {
+			return domain.WagerProcessingResult{}, fmt.Errorf("commit pending reference: %w", err)
+		}
+		return result, nil
+	}
+
+	wallet, err := lockWallet(ctx, dbtx, transaction.WalletID(), transaction.PlayerID(), transaction.Money().Currency())
+	if err != nil {
+		return domain.WagerProcessingResult{}, err
+	}
+	initialWalletVersion := wallet.Version()
 
 	result, err := domain.ProcessWagerTransaction(&wallet, &transaction, reference, ledgerEntryID, now)
 	if err != nil {
@@ -191,10 +211,11 @@ func insertPendingTransaction(ctx context.Context, tx pgx.Tx, transaction domain
 			id, source, provider_id, external_transaction_id, idempotency_key, payload_hash,
 			wallet_id, player_id, currency, round_id, game_id, kind, amount_minor,
 			reference_external_transaction_id, reference_transaction_id, status, failure_code,
-			result_balance_minor, created_at, updated_at, processed_at
+			result_balance_minor, created_at, updated_at, processed_at,
+			next_reference_attempt_at, reference_expires_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-			$14, $15, $16, $17, $18, $19, $20, $21
+			$14, $15, $16, $17, $18, $19, $20, $21, $22, $23
 		)`
 	args := []any{
 		snapshot.ID, source, nullableText(snapshot.ProviderID), nullableText(snapshot.ExternalTransactionID),
@@ -203,7 +224,8 @@ func insertPendingTransaction(ctx context.Context, tx pgx.Tx, transaction domain
 		string(snapshot.Kind), snapshot.Money.MinorUnits(), nullableText(snapshot.ReferenceExternalID),
 		nullableText(snapshot.ReferenceID), string(snapshot.Status), nullableText(snapshot.FailureCode),
 		nullableMoney(snapshot.ResultBalance, snapshot.HasResultBalance), snapshot.CreatedAt, snapshot.UpdatedAt,
-		nullableTime(snapshot.ProcessedAt),
+		nullableTime(snapshot.ProcessedAt), nullablePendingTime(snapshot.Status, snapshot.UpdatedAt),
+		nullablePendingTime(snapshot.Status, snapshot.UpdatedAt.Add(24*time.Hour)),
 	}
 	if source == "EXTERNAL" {
 		var insertedID string
@@ -367,6 +389,13 @@ func nullableMoney(value domain.Money, present bool) any {
 // nullableTime grava processed_at apenas para uma conclusão financeira bem-sucedida.
 func nullableTime(value time.Time) any {
 	if value.IsZero() {
+		return nil
+	}
+	return value
+}
+
+func nullablePendingTime(status domain.TransactionStatus, value time.Time) any {
+	if status != domain.TransactionPendingReference {
 		return nil
 	}
 	return value

@@ -111,7 +111,17 @@ Operações com referência consultam o PostgreSQL por `(providerId,
 externalTransactionId)`. A busca nunca usa somente o identificador externo, impedindo
 que uma reversão de um provedor alcance a transação de outro. Ausência é devolvida ao
 caso de uso como `ErrReferenceNotFound`; falhas de consulta permanecem erros de
-infraestrutura. A persistência de `PENDING_REFERENCE` será adicionada na etapa de retry.
+infraestrutura. Quando a referência não existe, a operação é confirmada como
+`PENDING_REFERENCE` junto com `WagerTransactionPendingReference` na outbox.
+
+Um worker reserva pendências com `FOR UPDATE SKIP LOCKED`, tentativas e proprietário
+duráveis. A cada tentativa ele procura a referência no mesmo provedor; quando encontra
+uma operação `PROCESSED`, resolve o vínculo e confirma saldo, ledger, estado e eventos
+no mesmo commit. Enquanto ela não está pronta, reagenda com backoff exponencial.
+A política atual usa TTL de 24 horas e no máximo 10 tentativas; o primeiro limite
+atingido encerra a transação como `REJECTED`, usa `REFERENCE_NOT_FOUND` e publica o
+evento de rejeição. Reservas abandonadas expiram após 30 segundos e podem ser
+assumidas por outra instância.
 
 O hash é SHA-256 sobre um JSON produzido por uma struct de ordem fixa com os campos
 `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`,
@@ -199,7 +209,7 @@ O endpoint limita o corpo a 64 KiB, exige `application/json`, rejeita campos des
 múltiplos valores JSON e `Idempotency-Key` ausente. Uma criação processada retorna `201`;
 replay idempotente retorna `200`; rejeição financeira retorna `422`; estados pendentes
 retornam `202`. Entrada inválida usa `400`, divergência de identidade usa `403`, conflito
-de idempotência ou referência ausente usa `409`, carteira inexistente usa `404` e
+de idempotência usa `409`, referência ainda ausente retorna `202`, carteira inexistente usa `404` e
 indisponibilidade transitória usa `503`. Os erros têm envelope JSON e código estável.
 
 O binário `cmd/api` compõe configuração, pool PostgreSQL, repositórios, autenticação,
@@ -215,8 +225,7 @@ não estiver disponível. A verificação ativa do SQS no readiness continua pen
 
 ## Próximas decisões e trabalho pendente
 
-Ainda estão pendentes a retomada de referências pendentes com retry e expiração,
-mapeamento de conflitos de reversão para códigos de rejeição, demais rotas da
+Ainda estão pendentes o mapeamento de conflitos de reversão para códigos de rejeição, demais rotas da
 API HTTP, readiness do SQS, métricas adicionais,
 Dockerfile e testes de concorrência
 distribuída com pelo menos três processos independentes. Os testes PostgreSQL locais já

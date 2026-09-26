@@ -137,19 +137,25 @@ func TestSubmitResolvesReferenceWithinAuthenticatedProvider(t *testing.T) {
 	}
 }
 
-// TestSubmitClassifiesMissingReference permite que os transportes decidam entre pendência e retry.
-func TestSubmitClassifiesMissingReference(t *testing.T) {
+// TestSubmitPersistsMissingReferenceAsPending prepara a retomada durável sem
+// devolver erro transitório ao transporte que já teve sua mensagem confirmada.
+func TestSubmitPersistsMissingReferenceAsPending(t *testing.T) {
 	t.Parallel()
 
 	command := validSubmitCommand()
 	command.Kind = "REFUND"
 	command.ReferenceExternalID = "missing-bet"
-	service, err := NewWagerService(&processorSpy{}, &referenceSpy{}, &sequenceIDs{values: []string{"refund-id", "refund-ledger"}}, fixedClock)
+	processor := &processorSpy{}
+	service, err := NewWagerService(processor, &referenceSpy{}, &sequenceIDs{values: []string{"refund-id", "refund-event", "refund-balance-event"}}, fixedClock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Submit(context.Background(), "provider-a", "provider-a:refund-1", command); !errors.Is(err, ErrReferenceNotFound) {
-		t.Fatalf("Submit() error = %v, want missing reference", err)
+	result, err := service.Submit(context.Background(), "provider-a", "provider-a:refund-1", command)
+	if err != nil {
+		t.Fatalf("Submit() error = %v", err)
+	}
+	if result.TransactionID != "refund-id" || processor.transaction.Status() != domain.TransactionPendingReference || processor.ledgerID != "" {
+		t.Fatalf("pending result = id %q, status %s, ledger %q", result.TransactionID, processor.transaction.Status(), processor.ledgerID)
 	}
 }
 

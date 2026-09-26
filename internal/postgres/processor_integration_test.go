@@ -212,6 +212,109 @@ func TestPostgresProcessesWinWithOptionalReference(t *testing.T) {
 	}
 }
 
+// TestPostgresResolvesOutOfOrderRefund valida a chegada da reversão antes da
+// aposta, seguida de retomada durável por outro worker.
+func TestPostgresResolvesOutOfOrderRefund(t *testing.T) {
+	store, pool := integrationStore(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	walletID, playerID := seedIntegrationWallet(t, pool, 10_000, now)
+	identity := strings.TrimPrefix(walletID, "it-wallet-")
+
+	refundMoney, _ := domain.ParseMoney("25.00", "BRL")
+	refundHash := sha256.Sum256([]byte("early-refund-" + identity))
+	refund, err := domain.NewExternalTransaction(domain.ExternalTransactionInput{
+		ID: "early-refund-" + identity, ProviderID: "provider-a",
+		ExternalTransactionID: "external-refund-" + identity,
+		IdempotencyKey:        "provider-a:refund-" + identity, PayloadHash: refundHash[:],
+		WalletID: walletID, PlayerID: playerID, RoundID: "it-round", GameID: "it-game",
+		Kind: domain.TransactionRefund, Money: refundMoney,
+		ReferenceExternalID: "external-late-bet-" + identity, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := refund.MarkPendingReference(now); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.ProcessWagerTransaction(context.Background(), refund, nil, "", integrationEventIDs(refund.ID()), nil, now)
+	if err != nil || result.Status != domain.TransactionPendingReference {
+		t.Fatalf("persist pending refund = status %s, error %v", result.Status, err)
+	}
+
+	bet := integrationTransaction(t, "late-bet", "external-late-bet", "provider-a:late-bet", walletID, playerID, domain.TransactionBet, "25.00", "late-bet-payload", now.Add(time.Second))
+	if _, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ledger-"+bet.ID(), integrationEventIDs(bet.ID()), nil, now.Add(time.Second)); err != nil {
+		t.Fatalf("process late BET: %v", err)
+	}
+	claimed, err := store.ClaimPendingReferences(context.Background(), "reference-worker-test", now.Add(2*time.Second), 30*time.Second, 10)
+	if err != nil || len(claimed) != 1 || claimed[0].TransactionID != refund.ID() {
+		t.Fatalf("claimed references = %+v, error %v", claimed, err)
+	}
+	resolved, err := store.ResolvePendingReference(context.Background(), refund.ID(), "reference-worker-test",
+		"ledger-"+refund.ID(), integrationEventIDs("resolved-"+refund.ID()), now.Add(2*time.Second))
+	if err != nil || !resolved {
+		t.Fatalf("ResolvePendingReference() = %v, %v", resolved, err)
+	}
+	balance, ledgerCount := readWalletAndLedger(t, pool, walletID)
+	if balance != 10_000 || ledgerCount != 2 {
+		t.Fatalf("balance/ledger = %d/%d, want 10000/2", balance, ledgerCount)
+	}
+	var status, referenceID string
+	if err := pool.QueryRow(context.Background(), `SELECT status, reference_transaction_id
+		FROM wager_transactions WHERE id = $1`, refund.ID()).Scan(&status, &referenceID); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(domain.TransactionProcessed) || referenceID != bet.ID() {
+		t.Fatalf("refund status/reference = %s/%s", status, referenceID)
+	}
+}
+
+// TestPostgresRejectsExpiredPendingReference registra resultado terminal e
+// libera a mensagem original que já foi concluída pela inbox.
+func TestPostgresRejectsExpiredPendingReference(t *testing.T) {
+	store, pool := integrationStore(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	walletID, playerID := seedIntegrationWallet(t, pool, 10_000, now)
+	identity := strings.TrimPrefix(walletID, "it-wallet-")
+	money, _ := domain.ParseMoney("25.00", "BRL")
+	hash := sha256.Sum256([]byte("expired-refund-" + identity))
+	refund, err := domain.NewExternalTransaction(domain.ExternalTransactionInput{
+		ID: "expired-refund-" + identity, ProviderID: "provider-a",
+		ExternalTransactionID: "expired-external-" + identity,
+		IdempotencyKey:        "provider-a:expired-" + identity, PayloadHash: hash[:],
+		WalletID: walletID, PlayerID: playerID, RoundID: "it-round", GameID: "it-game",
+		Kind: domain.TransactionRefund, Money: money,
+		ReferenceExternalID: "never-arrives-" + identity, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := refund.MarkPendingReference(now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ProcessWagerTransaction(context.Background(), refund, nil, "", integrationEventIDs(refund.ID()), nil, now); err != nil {
+		t.Fatal(err)
+	}
+	_, err = pool.Exec(context.Background(), `UPDATE wager_transactions
+		SET next_reference_attempt_at = $1, reference_expires_at = $1 WHERE id = $2`, now.Add(-time.Second), refund.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimPendingReferences(context.Background(), "expiry-worker", now, 30*time.Second, 10)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim expired = %+v, %v", claimed, err)
+	}
+	if err := store.RejectPendingReference(context.Background(), refund.ID(), "expiry-worker", "expired-event-"+identity, now); err != nil {
+		t.Fatalf("RejectPendingReference() error = %v", err)
+	}
+	var status, failure string
+	if err := pool.QueryRow(context.Background(), `SELECT status, failure_code FROM wager_transactions WHERE id = $1`, refund.ID()).Scan(&status, &failure); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(domain.TransactionRejected) || failure != application.FailureReferenceNotFound {
+		t.Fatalf("status/failure = %s/%s", status, failure)
+	}
+}
+
 // integrationStore conecta somente quando uma URL de banco de teste explicitamente configurada está disponível.
 func integrationStore(t *testing.T) (*Store, *pgxpool.Pool) {
 	t.Helper()

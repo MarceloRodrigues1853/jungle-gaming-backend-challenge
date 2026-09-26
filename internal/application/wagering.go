@@ -149,16 +149,19 @@ func (service *WagerService) submit(ctx context.Context, providerID, idempotency
 			return domain.WagerProcessingResult{}, err
 		}
 		if !exists {
-			return domain.WagerProcessingResult{}, ErrReferenceNotFound
+			if err := transaction.MarkPendingReference(now); err != nil {
+				return domain.WagerProcessingResult{}, fmt.Errorf("%w: %v", ErrInvalidWagerCommand, err)
+			}
+		} else {
+			if err := transaction.ResolveReference(found, now); err != nil {
+				return domain.WagerProcessingResult{}, fmt.Errorf("%w: %v", ErrInvalidWagerCommand, err)
+			}
+			reference = &found
 		}
-		if err := transaction.ResolveReference(found, now); err != nil {
-			return domain.WagerProcessingResult{}, fmt.Errorf("%w: %v", ErrInvalidWagerCommand, err)
-		}
-		reference = &found
 	}
 
 	ledgerEntryID := ""
-	if transaction.Kind() != domain.TransactionLoss {
+	if transaction.Kind() != domain.TransactionLoss && transaction.Status() != domain.TransactionPendingReference {
 		ledgerEntryID, err = service.ids.NewID()
 		if err != nil {
 			return domain.WagerProcessingResult{}, fmt.Errorf("generate ledger entry id: %w", err)

@@ -31,9 +31,10 @@ func NewApp() *fx.App {
 			newOutboxPublisher,
 			newOutboxWorker,
 			newSQSConsumer,
+			newReferenceWorker,
 			newHTTPHandler,
 		),
-		fx.Invoke(registerHTTPServer, registerOutboxWorker, registerSQSConsumer),
+		fx.Invoke(registerHTTPServer, registerOutboxWorker, registerSQSConsumer, registerReferenceWorker),
 	)
 }
 

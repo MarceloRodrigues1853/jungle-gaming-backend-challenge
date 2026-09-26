@@ -26,7 +26,13 @@ variáveis `HTTP_ADDRESS`, `DATABASE_URL`, `OIDC_INTROSPECTION_URL`,
 `PROVIDER_CLIENT_ID`, `PROVIDER_ID`, `AWS_REGION`, `SQS_ENDPOINT`,
 `SQS_OUTPUT_QUEUE_URL`, `SQS_INPUT_QUEUE_URL`, `SQS_CONSUMER_NAME`,
 `SQS_WAIT_TIME_SECONDS`, `SQS_VISIBILITY_TIMEOUT_SECONDS`, `SQS_MAX_MESSAGES`,
-`OUTBOX_POLL_INTERVAL`, `OUTBOX_LOCK_DURATION` e `OUTBOX_BATCH_SIZE`.
+`OUTBOX_POLL_INTERVAL`, `OUTBOX_LOCK_DURATION`, `OUTBOX_BATCH_SIZE`,
+`REFERENCE_POLL_INTERVAL`, `REFERENCE_LOCK_DURATION`, `REFERENCE_BATCH_SIZE` e
+`REFERENCE_MAX_ATTEMPTS`.
+
+Uma `REFUND` ou `ROLLBACK` cuja operação original ainda não chegou retorna `202` e é
+persistida como `PENDING_REFERENCE`. O worker tenta novamente com backoff, recupera
+reservas abandonadas e rejeita com `REFERENCE_NOT_FOUND` após 10 tentativas ou 24 horas.
 
 O LocalStack provisiona `jungle-events.fifo` para eventos de saída e também prepara
 `wager-transactions.fifo` e sua DLQ. O publicador
