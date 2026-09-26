@@ -132,6 +132,25 @@ func TestSubmitResolvesReferenceWithinAuthenticatedProvider(t *testing.T) {
 	if processor.reference == nil || processor.reference.ID() != reference.ID() {
 		t.Fatal("resolved reference was not forwarded to processor")
 	}
+	if processor.transaction.ReferenceID() != reference.ID() {
+		t.Fatalf("transaction reference id = %q, want %q", processor.transaction.ReferenceID(), reference.ID())
+	}
+}
+
+// TestSubmitClassifiesMissingReference permite que os transportes decidam entre pendência e retry.
+func TestSubmitClassifiesMissingReference(t *testing.T) {
+	t.Parallel()
+
+	command := validSubmitCommand()
+	command.Kind = "REFUND"
+	command.ReferenceExternalID = "missing-bet"
+	service, err := NewWagerService(&processorSpy{}, &referenceSpy{}, &sequenceIDs{values: []string{"refund-id", "refund-ledger"}}, fixedClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Submit(context.Background(), "provider-a", "provider-a:refund-1", command); !errors.Is(err, ErrReferenceNotFound) {
+		t.Fatalf("Submit() error = %v, want missing reference", err)
+	}
 }
 
 // processorSpy captura a chamada que futuramente será compartilhada por HTTP e SQS.
@@ -153,9 +172,9 @@ type referenceSpy struct {
 	transaction            domain.WagerTransaction
 }
 
-func (spy *referenceSpy) FindProviderTransaction(_ context.Context, providerID, externalID string) (domain.WagerTransaction, error) {
+func (spy *referenceSpy) FindProviderTransaction(_ context.Context, providerID, externalID string) (domain.WagerTransaction, bool, error) {
 	spy.providerID, spy.externalID = providerID, externalID
-	return spy.transaction, nil
+	return spy.transaction, spy.transaction.ID() != "", nil
 }
 
 // sequenceIDs torna os identificadores previsíveis nos testes do caso de uso.

@@ -2,7 +2,9 @@
 
 `001_financial_core.up.sql` cria o schema financeiro. A migration
 `002_reversal_exclusivity.up.sql` exige referência interna nas reversões concluídas e
-permite apenas uma reversão bem-sucedida por transação referenciada. O valor monetário
+permite apenas uma reversão bem-sucedida por transação referenciada. A migration
+`003_optional_win_reference.up.sql` permite a referência opcional de uma `WIN` e exige
+que ela esteja resolvida quando a operação for concluída. O valor monetário
 é persistido em unidades mínimas (`BIGINT`), compatível com
 `domain.Money.MinorUnits()`; nenhuma coluna usa ponto flutuante.
 
@@ -32,6 +34,7 @@ que vem no container:
 ```sh
 docker compose exec -T postgres psql -U jungle_app -d jungle_gaming -v ON_ERROR_STOP=1 < migrations/001_financial_core.up.sql
 docker compose exec -T postgres psql -U jungle_app -d jungle_gaming -v ON_ERROR_STOP=1 < migrations/002_reversal_exclusivity.up.sql
+docker compose exec -T postgres psql -U jungle_app -d jungle_gaming -v ON_ERROR_STOP=1 < migrations/003_optional_win_reference.up.sql
 ```
 
 Com as migrations aplicadas, execute os testes de integração contra esse banco. No
@@ -57,6 +60,7 @@ PostgreSQL e `psql` instalados localmente, as alternativas a seguir também func
 ```powershell
 psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_financial_core.up.sql
 psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_reversal_exclusivity.up.sql
+psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/003_optional_win_reference.up.sql
 ```
 
 No Bash, use:
@@ -64,11 +68,13 @@ No Bash, use:
 ```sh
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_financial_core.up.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_reversal_exclusivity.up.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/003_optional_win_reference.up.sql
 ```
 
 Para reverter todas as migrations, execute os arquivos `down` em ordem inversa: primeiro
-`002_reversal_exclusivity.down.sql`, depois `001_financial_core.down.sql`. A primeira
-restaura a regra de unicidade anterior; a segunda remove todas as tabelas e dados
+`003_optional_win_reference.down.sql`, depois `002_reversal_exclusivity.down.sql` e
+`001_financial_core.down.sql`. A migration 003 volta a bloquear referência em `WIN`,
+a 002 restaura a regra de unicidade anterior e a 001 remove todas as tabelas e dados
 financeiros do schema. Faça backup antes de usar a segunda em qualquer ambiente com
 dados que precisem ser preservados.
 

@@ -46,7 +46,7 @@ type TransactionProcessor interface {
 
 // ReferenceFinder localiza uma operação já persistida no mesmo provedor.
 type ReferenceFinder interface {
-	FindProviderTransaction(context.Context, string, string) (domain.WagerTransaction, error)
+	FindProviderTransaction(context.Context, string, string) (domain.WagerTransaction, bool, error)
 }
 
 // IDGenerator produz identificadores internos sem acoplar o caso de uso a uma biblioteca.
@@ -114,9 +114,15 @@ func (service *WagerService) Submit(ctx context.Context, providerID, idempotency
 		if service.references == nil {
 			return domain.WagerProcessingResult{}, errors.New("reference finder is required for referenced operations")
 		}
-		found, err := service.references.FindProviderTransaction(ctx, providerID, command.ReferenceExternalID)
+		found, exists, err := service.references.FindProviderTransaction(ctx, providerID, command.ReferenceExternalID)
 		if err != nil {
 			return domain.WagerProcessingResult{}, err
+		}
+		if !exists {
+			return domain.WagerProcessingResult{}, ErrReferenceNotFound
+		}
+		if err := transaction.ResolveReference(found, now); err != nil {
+			return domain.WagerProcessingResult{}, fmt.Errorf("%w: %v", ErrInvalidWagerCommand, err)
 		}
 		reference = &found
 	}

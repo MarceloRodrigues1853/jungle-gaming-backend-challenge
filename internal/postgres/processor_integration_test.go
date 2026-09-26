@@ -105,6 +105,69 @@ func TestPostgresConcurrentBetsSerializePerWallet(t *testing.T) {
 	}
 }
 
+// TestPostgresFindProviderTransactionIsolatesProvider valida a busca usada por reversões.
+func TestPostgresFindProviderTransactionIsolatesProvider(t *testing.T) {
+	store, pool := integrationStore(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	walletID, playerID := seedIntegrationWallet(t, pool, 10_000, now)
+	bet := integrationTransaction(t, "bet-reference", "external-reference", "provider-a:reference", walletID, playerID, domain.TransactionBet, "25.00", "reference-payload", now)
+	if _, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ledger-"+bet.ID(), now.Add(time.Second)); err != nil {
+		t.Fatalf("ProcessWagerTransaction() error = %v", err)
+	}
+
+	found, exists, err := store.FindProviderTransaction(context.Background(), "provider-a", bet.ExternalTransactionID())
+	if err != nil {
+		t.Fatalf("FindProviderTransaction() error = %v", err)
+	}
+	if !exists || found.ID() != bet.ID() || found.Status() != domain.TransactionProcessed {
+		t.Fatalf("found transaction = %s/%s, exists %v", found.ID(), found.Status(), exists)
+	}
+
+	if _, exists, err := store.FindProviderTransaction(context.Background(), "provider-b", bet.ExternalTransactionID()); err != nil || exists {
+		t.Fatalf("cross-provider lookup exists/error = %v/%v, want false/nil", exists, err)
+	}
+}
+
+// TestPostgresProcessesWinWithOptionalReference cobre o contrato que permite vincular WIN a BET.
+func TestPostgresProcessesWinWithOptionalReference(t *testing.T) {
+	store, pool := integrationStore(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	walletID, playerID := seedIntegrationWallet(t, pool, 10_000, now)
+	bet := integrationTransaction(t, "bet-for-win", "external-bet-for-win", "provider-a:bet-for-win", walletID, playerID, domain.TransactionBet, "25.00", "bet-for-win-payload", now)
+	if _, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ledger-"+bet.ID(), now.Add(time.Second)); err != nil {
+		t.Fatalf("process referenced BET: %v", err)
+	}
+	reference, exists, err := store.FindProviderTransaction(context.Background(), "provider-a", bet.ExternalTransactionID())
+	if err != nil || !exists {
+		t.Fatalf("load processed BET reference = exists %v, error %v", exists, err)
+	}
+
+	identity := strings.TrimPrefix(walletID, "it-wallet-")
+	winMoney, _ := domain.ParseMoney("10.00", "BRL")
+	winHash := sha256.Sum256([]byte("referenced-win-payload"))
+	win, err := domain.NewExternalTransaction(domain.ExternalTransactionInput{
+		ID: "win-with-reference-" + identity, ProviderID: "provider-a",
+		ExternalTransactionID: "external-win-with-reference-" + identity,
+		IdempotencyKey:        "provider-a:win-with-reference-" + identity, PayloadHash: winHash[:],
+		WalletID: walletID, PlayerID: playerID, RoundID: "it-round", GameID: "it-game",
+		Kind: domain.TransactionWin, Money: winMoney,
+		ReferenceExternalID: bet.ExternalTransactionID(), Now: now.Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("NewExternalTransaction() error = %v", err)
+	}
+	if err := win.ResolveReference(reference, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("ResolveReference() error = %v", err)
+	}
+	result, err := store.ProcessWagerTransaction(context.Background(), win, &reference, "ledger-"+win.ID(), now.Add(3*time.Second))
+	if err != nil {
+		t.Fatalf("process referenced WIN: %v", err)
+	}
+	if result.Status != domain.TransactionProcessed || result.Balance.String() != "85.00" {
+		t.Fatalf("WIN result = %s/%s, want PROCESSED/85.00", result.Status, result.Balance)
+	}
+}
+
 // integrationStore conecta somente quando uma URL de banco de teste explicitamente configurada está disponível.
 func integrationStore(t *testing.T) (*Store, *pgxpool.Pool) {
 	t.Helper()

@@ -108,6 +108,12 @@ mesma entidade para entradas HTTP ou SQS. Identificadores com espaços nas extre
 são rejeitados em vez de normalizados silenciosamente; valores monetários exigem a
 forma decimal exata já definida por `domain.ParseMoney`.
 
+Operações com referência consultam o PostgreSQL por `(providerId,
+externalTransactionId)`. A busca nunca usa somente o identificador externo, impedindo
+que uma reversão de um provedor alcance a transação de outro. Ausência é devolvida ao
+caso de uso como `ErrReferenceNotFound`; falhas de consulta permanecem erros de
+infraestrutura. A persistência de `PENDING_REFERENCE` será adicionada na etapa de retry.
+
 O hash é SHA-256 sobre um JSON produzido por uma struct de ordem fixa com os campos
 `providerId`, `externalTransactionId`, `playerId`, `walletId`, `roundId`, `gameId`,
 `kind`, `amount`, `currency` e `referenceExternalTransactionId`. O valor monetário é
