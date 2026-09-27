@@ -230,11 +230,13 @@ leitura em `REPEATABLE READ`. Nessa mesma visão, lê o saldo armazenado e calcu
 créditos menos débitos do ledger. A resposta informa os dois valores, diferença,
 quantidade de lançamentos e consistência, sem modificar a carteira.
 
-O binário `cmd/api` compõe configuração, pool PostgreSQL, repositórios, autenticação,
-casos de uso, handlers e servidor usando `fx.Provide` e `fx.Invoke`. O pool é validado
-no `OnStart`; depois o servidor abre sua porta. No `OnStop`, a ordem inversa encerra o
-HTTP graciosamente antes de fechar o pool. O servidor configura prazos de leitura,
-escrita, cabeçalhos e conexões ociosas. Instruções de Postman estão em
+O binário `cmd/api` separa configuração, infraestrutura, aplicação e transporte em
+quatro `fx.Module`, com construtores em `fx.Provide` e processos em `fx.Invoke`. O pool
+é validado no `OnStart`; depois o servidor abre sua porta e os workers iniciam. No
+`OnStop`, a ordem inversa cancela e aguarda os workers, encerra o HTTP graciosamente e
+fecha o pool. Além da validação estática do grafo, um teste opt-in executa esse ciclo
+completo contra PostgreSQL, Keycloak e LocalStack reais. O servidor configura prazos
+de leitura, escrita, cabeçalhos e conexões ociosas. Instruções de Postman estão em
 `docs/LOCAL_DEVELOPMENT.md`.
 
 `GET /health/live` confirma somente que o processo HTTP responde. `GET /health/ready`

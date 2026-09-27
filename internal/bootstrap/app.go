@@ -16,29 +16,38 @@ import (
 	"go.uber.org/fx"
 )
 
+// configurationModule reúne configuração e dependências sem estado externo.
+var configurationModule = fx.Module("configuration",
+	fx.Provide(LoadConfig, newLogger, observability.NewMetrics, newIDGenerator),
+)
+
+// infrastructureModule concentra adaptadores de PostgreSQL, OIDC e SQS.
+var infrastructureModule = fx.Module("infrastructure",
+	fx.Provide(newPostgresPool, postgresstore.NewStore, newSQSClient, newIntrospector,
+		newReadiness, newOutboxPublisher),
+)
+
+// applicationModule liga os casos de uso às portas fornecidas pela infraestrutura.
+var applicationModule = fx.Module("application",
+	fx.Provide(newWagerService, newWalletService, newOutboxWorker, newSQSConsumer, newReferenceWorker),
+)
+
+// transportModule expõe HTTP e inicia todos os processos supervisionados pelo Fx.
+var transportModule = fx.Module("transport",
+	fx.Provide(
+		newHTTPHandler,
+	),
+	fx.Invoke(registerHTTPServer, registerOutboxWorker, registerSQSConsumer, registerReferenceWorker),
+)
+
+// appOptions mantém a mesma composição disponível para validação sem construir recursos.
+func appOptions() []fx.Option {
+	return []fx.Option{configurationModule, infrastructureModule, applicationModule, transportModule}
+}
+
 // NewApp declara a composição completa e deixa o lifecycle sob responsabilidade do Fx.
 func NewApp() *fx.App {
-	return fx.New(
-		fx.Provide(
-			LoadConfig,
-			newLogger,
-			observability.NewMetrics,
-			newPostgresPool,
-			postgresstore.NewStore,
-			newIDGenerator,
-			newIntrospector,
-			newWagerService,
-			newWalletService,
-			newSQSClient,
-			newReadiness,
-			newOutboxPublisher,
-			newOutboxWorker,
-			newSQSConsumer,
-			newReferenceWorker,
-			newHTTPHandler,
-		),
-		fx.Invoke(registerHTTPServer, registerOutboxWorker, registerSQSConsumer, registerReferenceWorker),
-	)
+	return fx.New(appOptions()...)
 }
 
 // newLogger cria logs estruturados sem incluir segredos de configuração.

@@ -67,6 +67,13 @@ Testes com PostgreSQL real, depois de aplicar as migrations:
 JUNGLE_TEST_DATABASE_URL="postgres://jungle_app:local_dev_only@127.0.0.1:5432/jungle_gaming?sslmode=disable" go test ./...
 ```
 
+Validação opt-in da composição Fx e de todos os hooks de início e encerramento,
+com as dependências do Compose ativas:
+
+```sh
+JUNGLE_BOOTSTRAP_TEST=1 go test -v ./internal/bootstrap -run TestAppStartsAndStopsWithRealDependencies -count=1
+```
+
 Detecção de corrida, em ambiente com compilador C disponível:
 
 ```sh

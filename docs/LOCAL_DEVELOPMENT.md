@@ -87,6 +87,19 @@ concorrência, retries e atraso da outbox, latência financeira e divergências 
 reconciliação. Identificadores de jogador, carteira, transação e provedor não são
 usados como labels.
 
+## Composição e lifecycle do Fx
+
+Com PostgreSQL, Keycloak e LocalStack ativos, valide a construção dos módulos e todos
+os hooks reais de início e encerramento:
+
+```powershell
+$env:JUNGLE_BOOTSTRAP_TEST = "1"
+go test -v ./internal/bootstrap -run TestAppStartsAndStopsWithRealDependencies -count=1
+```
+
+O teste usa uma porta HTTP temporária, inicia os três workers e confirma o encerramento
+gracioso antes de fechar o pool PostgreSQL.
+
 ## Teste distribuído com três processos
 
 Depois de subir as dependências e aplicar as migrations, inicie o perfil distribuído:
