@@ -67,6 +67,12 @@ Testes com PostgreSQL real, depois de aplicar as migrations:
 JUNGLE_TEST_DATABASE_URL="postgres://jungle_app:local_dev_only@127.0.0.1:5432/jungle_gaming?sslmode=disable" go test ./...
 ```
 
+Recuperação da outbox nos dois intervalos de falha e disputa entre publicadores:
+
+```sh
+JUNGLE_TEST_DATABASE_URL="postgres://jungle_app:local_dev_only@127.0.0.1:5432/jungle_gaming?sslmode=disable" go test -v ./internal/postgres -run TestPostgresOutbox -count=1
+```
+
 Validação opt-in da composição Fx e de todos os hooks de início e encerramento,
 com as dependências do Compose ativas:
 

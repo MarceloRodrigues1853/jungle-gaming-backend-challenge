@@ -41,6 +41,21 @@ usa `eventId` como `MessageDeduplicationId` e `aggregateId` como `MessageGroupId
 O consumidor usa o `messageId` do envelope na inbox e só remove uma mensagem depois
 que inbox, transação, saldo, ledger e outbox foram confirmados no PostgreSQL.
 
+## Recuperação da outbox
+
+Com o PostgreSQL ativo e as migrations aplicadas, execute os cenários que simulam a
+interrupção após o commit e antes da publicação, a interrupção após a publicação e
+antes da confirmação, e dois publishers concorrentes:
+
+```powershell
+$env:JUNGLE_TEST_DATABASE_URL = "postgres://jungle_app:local_dev_only@127.0.0.1:5432/jungle_gaming?sslmode=disable"
+go test -v ./internal/postgres -run TestPostgresOutbox -count=1
+```
+
+No segundo cenário, o evento pode ser reenviado porque a publicação no SQS e a
+confirmação em `published_at` não formam uma transação única. A identidade preservada
+em `eventId` permite que o destino FIFO e os consumidores façam a deduplicação.
+
 ## Envio manual pela fila SQS
 
 Com a aplicação e os containers ativos, envie o envelope abaixo pela AWS CLI do

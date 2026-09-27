@@ -153,6 +153,13 @@ deduplicação e `aggregateId` mantém a ordem por agregado. Como a confirmaçã
 do PostgreSQL não é atômica, uma interrupção entre essas duas etapas pode republicar
 o mesmo `eventId`; consumidores devem deduplicá-lo.
 
+Os testes de integração reproduzem explicitamente os dois intervalos de falha. No
+primeiro, um evento já confirmado permanece pendente até ser assumido por uma nova
+instância. No segundo, o primeiro worker registra o envio, cai sem preencher
+`published_at` e outro worker reassume a reserva expirada com o mesmo `eventId` e a
+tentativa incrementada. Um terceiro cenário dispara dois publishers simultaneamente
+e confirma que somente um deles obtém a propriedade de cada registro.
+
 ### Consumidor SQS e inbox
 
 `internal/sqsconsumer` usa long polling sobre `wager-transactions.fifo`, valida um
