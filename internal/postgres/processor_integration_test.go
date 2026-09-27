@@ -212,6 +212,71 @@ func TestPostgresProcessesWinWithOptionalReference(t *testing.T) {
 	}
 }
 
+// TestPostgresRejectsConcurrentDoubleReversal demonstra que duas instâncias não
+// conseguem devolver a mesma operação e que a perdedora recebe código auditável.
+func TestPostgresRejectsConcurrentDoubleReversal(t *testing.T) {
+	store, pool := integrationStore(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	walletID, playerID := seedIntegrationWallet(t, pool, 10_000, now)
+	bet := integrationTransaction(t, "bet-double-reversal", "external-bet-double-reversal",
+		"provider-a:bet-double-reversal", walletID, playerID, domain.TransactionBet, "25.00", "bet-double-reversal", now)
+	if _, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ledger-"+bet.ID(), integrationEventIDs(bet.ID()), nil, now.Add(time.Second)); err != nil {
+		t.Fatalf("process referenced BET: %v", err)
+	}
+	reference, exists, err := store.FindProviderTransaction(context.Background(), "provider-a", bet.ExternalTransactionID())
+	if err != nil || !exists {
+		t.Fatalf("load processed BET reference = exists %v, error %v", exists, err)
+	}
+
+	reversals := []domain.WagerTransaction{
+		integrationReversal(t, "refund-double-a", "external-refund-double-a", walletID, playerID, reference, now.Add(2*time.Second)),
+		integrationReversal(t, "rollback-double-b", "external-rollback-double-b", walletID, playerID, reference, now.Add(2*time.Second)),
+	}
+	results := make([]domain.WagerProcessingResult, len(reversals))
+	errorsByReversal := make([]error, len(reversals))
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	for index := range reversals {
+		group.Add(1)
+		go func(index int) {
+			defer group.Done()
+			<-start
+			results[index], errorsByReversal[index] = store.ProcessWagerTransaction(context.Background(), reversals[index], &reference,
+				"ledger-"+reversals[index].ID(), integrationEventIDs(reversals[index].ID()), nil, now.Add(3*time.Second))
+		}(index)
+	}
+	close(start)
+	group.Wait()
+
+	processed, rejected := 0, 0
+	for index, processErr := range errorsByReversal {
+		if processErr != nil {
+			t.Fatalf("reversal %d returned infrastructure error: %v", index, processErr)
+		}
+		switch results[index].Status {
+		case domain.TransactionProcessed:
+			processed++
+		case domain.TransactionRejected:
+			rejected++
+			if results[index].FailureCode != domain.FailureReversalAlreadyProcessed {
+				t.Fatalf("reversal %d failure code = %q", index, results[index].FailureCode)
+			}
+		default:
+			t.Fatalf("reversal %d status = %s", index, results[index].Status)
+		}
+	}
+	if processed != 1 || rejected != 1 {
+		t.Fatalf("processed/rejected reversals = %d/%d, want 1/1", processed, rejected)
+	}
+	balance, ledgerCount := readWalletAndLedger(t, pool, walletID)
+	if balance != 10_000 || ledgerCount != 2 {
+		t.Fatalf("balance/ledger after double reversal = %d/%d, want 10000/2", balance, ledgerCount)
+	}
+	if outboxCount := readWalletOutboxCount(t, pool, walletID); outboxCount != 5 {
+		t.Fatalf("outbox events after double reversal = %d, want 5", outboxCount)
+	}
+}
+
 // TestPostgresResolvesOutOfOrderRefund valida a chegada da reversão antes da
 // aposta, seguida de retomada durável por outro worker.
 func TestPostgresResolvesOutOfOrderRefund(t *testing.T) {
@@ -265,6 +330,73 @@ func TestPostgresResolvesOutOfOrderRefund(t *testing.T) {
 	}
 	if status != string(domain.TransactionProcessed) || referenceID != bet.ID() {
 		t.Fatalf("refund status/reference = %s/%s", status, referenceID)
+	}
+}
+
+// TestPostgresRejectsOutOfOrderReversalWhenReferenceWasAlreadyReversed garante
+// a mesma política quando a operação é retomada pelo worker de referências.
+func TestPostgresRejectsOutOfOrderReversalWhenReferenceWasAlreadyReversed(t *testing.T) {
+	store, pool := integrationStore(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	walletID, playerID := seedIntegrationWallet(t, pool, 10_000, now)
+	identity := strings.TrimPrefix(walletID, "it-wallet-")
+
+	money, _ := domain.ParseMoney("25.00", "BRL")
+	pendingHash := sha256.Sum256([]byte("pending-duplicate-reversal-" + identity))
+	pending, err := domain.NewExternalTransaction(domain.ExternalTransactionInput{
+		ID: "pending-duplicate-reversal-" + identity, ProviderID: "provider-a",
+		ExternalTransactionID: "external-pending-duplicate-" + identity,
+		IdempotencyKey:        "provider-a:pending-duplicate-" + identity, PayloadHash: pendingHash[:],
+		WalletID: walletID, PlayerID: playerID, RoundID: "it-round", GameID: "it-game",
+		Kind: domain.TransactionRefund, Money: money,
+		ReferenceExternalID: "external-late-duplicate-bet-" + identity, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pending.MarkPendingReference(now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ProcessWagerTransaction(context.Background(), pending, nil, "", integrationEventIDs(pending.ID()), nil, now); err != nil {
+		t.Fatalf("persist pending reversal: %v", err)
+	}
+
+	bet := integrationTransaction(t, "late-duplicate-bet", "external-late-duplicate-bet",
+		"provider-a:late-duplicate-bet", walletID, playerID, domain.TransactionBet, "25.00", "late-duplicate-bet", now.Add(time.Second))
+	if _, err := store.ProcessWagerTransaction(context.Background(), bet, nil, "ledger-"+bet.ID(), integrationEventIDs(bet.ID()), nil, now.Add(time.Second)); err != nil {
+		t.Fatalf("process late BET: %v", err)
+	}
+	reference, exists, err := store.FindProviderTransaction(context.Background(), "provider-a", bet.ExternalTransactionID())
+	if err != nil || !exists {
+		t.Fatalf("load late BET = exists %v, error %v", exists, err)
+	}
+	firstReversal := integrationReversal(t, "rollback-before-worker", "external-rollback-before-worker",
+		walletID, playerID, reference, now.Add(2*time.Second))
+	if _, err := store.ProcessWagerTransaction(context.Background(), firstReversal, &reference,
+		"ledger-"+firstReversal.ID(), integrationEventIDs(firstReversal.ID()), nil, now.Add(3*time.Second)); err != nil {
+		t.Fatalf("process first reversal: %v", err)
+	}
+
+	claimed, err := store.ClaimPendingReferences(context.Background(), "duplicate-reference-worker", now.Add(4*time.Second), 30*time.Second, 10)
+	if err != nil || len(claimed) != 1 || claimed[0].TransactionID != pending.ID() {
+		t.Fatalf("claimed pending reversal = %+v, error %v", claimed, err)
+	}
+	resolved, err := store.ResolvePendingReference(context.Background(), pending.ID(), "duplicate-reference-worker",
+		"ledger-"+pending.ID(), integrationEventIDs("resolved-"+pending.ID()), now.Add(4*time.Second))
+	if err != nil || !resolved {
+		t.Fatalf("resolve duplicate pending reversal = %v, %v", resolved, err)
+	}
+
+	var status, failureCode string
+	if err := pool.QueryRow(context.Background(), `SELECT status, failure_code FROM wager_transactions WHERE id = $1`, pending.ID()).Scan(&status, &failureCode); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(domain.TransactionRejected) || failureCode != domain.FailureReversalAlreadyProcessed {
+		t.Fatalf("pending reversal status/failure = %s/%s", status, failureCode)
+	}
+	balance, ledgerCount := readWalletAndLedger(t, pool, walletID)
+	if balance != 10_000 || ledgerCount != 2 {
+		t.Fatalf("balance/ledger after pending duplicate = %d/%d, want 10000/2", balance, ledgerCount)
 	}
 }
 
@@ -373,6 +505,35 @@ func integrationTransaction(t *testing.T, id, externalID, idempotencyKey, wallet
 		t.Fatalf("NewExternalTransaction() error = %v", err)
 	}
 	return tx
+}
+
+// integrationReversal cria e vincula uma reversão válida para cenários concorrentes.
+func integrationReversal(t *testing.T, id, externalID, walletID, playerID string, reference domain.WagerTransaction, now time.Time) domain.WagerTransaction {
+	t.Helper()
+	identity := strings.TrimPrefix(walletID, "it-wallet-")
+	hash := sha256.Sum256([]byte(id + "-payload-" + identity))
+	money, err := domain.ParseMoney(reference.Money().String(), reference.Money().Currency())
+	if err != nil {
+		t.Fatal(err)
+	}
+	kind := domain.TransactionRefund
+	if strings.HasPrefix(id, "rollback") {
+		kind = domain.TransactionRollback
+	}
+	transaction, err := domain.NewExternalTransaction(domain.ExternalTransactionInput{
+		ID: id + "-" + identity, ProviderID: "provider-a",
+		ExternalTransactionID: externalID + "-" + identity,
+		IdempotencyKey:        "provider-a:" + externalID + "-" + identity, PayloadHash: hash[:],
+		WalletID: walletID, PlayerID: playerID, RoundID: "it-round", GameID: "it-game",
+		Kind: kind, Money: money, ReferenceExternalID: reference.ExternalTransactionID(), Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.ResolveReference(reference, now); err != nil {
+		t.Fatal(err)
+	}
+	return transaction
 }
 
 // readWalletAndLedger consulta o saldo e a quantidade de lançamentos da carteira de integração.

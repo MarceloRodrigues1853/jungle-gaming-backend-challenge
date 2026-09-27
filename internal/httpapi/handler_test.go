@@ -89,12 +89,14 @@ func TestSubmitWagerMapsReplayAndKnownErrors(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name, code string
-		result     domain.WagerProcessingResult
-		err        error
-		status     int
+		name, code, failureCode string
+		result                  domain.WagerProcessingResult
+		err                     error
+		status                  int
 	}{
 		{name: "idempotent replay", result: domain.WagerProcessingResult{TransactionID: "tx", Status: domain.TransactionProcessed, IdempotentReplay: true}, status: http.StatusOK},
+		{name: "duplicate reversal", result: domain.WagerProcessingResult{TransactionID: "tx-reversal", Status: domain.TransactionRejected,
+			FailureCode: domain.FailureReversalAlreadyProcessed}, failureCode: domain.FailureReversalAlreadyProcessed, status: http.StatusUnprocessableEntity},
 		{name: "idempotency conflict", err: application.ErrIdempotencyConflict, code: "IDEMPOTENCY_CONFLICT", status: http.StatusConflict},
 		{name: "reference missing", err: application.ErrReferenceNotFound, code: "REFERENCE_NOT_FOUND", status: http.StatusConflict},
 		{name: "wallet missing", err: application.ErrWalletNotFound, code: "WALLET_NOT_FOUND", status: http.StatusNotFound},
@@ -109,6 +111,9 @@ func TestSubmitWagerMapsReplayAndKnownErrors(t *testing.T) {
 			}
 			if test.code != "" {
 				assertErrorCode(t, response, test.code)
+			}
+			if test.failureCode != "" && !strings.Contains(response.Body.String(), `"failureCode":"`+test.failureCode+`"`) {
+				t.Fatalf("body = %s, want failureCode %s", response.Body.String(), test.failureCode)
 			}
 		})
 	}

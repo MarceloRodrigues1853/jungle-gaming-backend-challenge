@@ -71,9 +71,15 @@ func (store *Store) ResolvePendingReference(ctx context.Context, transactionID, 
 		return false, err
 	}
 	previousVersion := wallet.Version()
-	result, err := domain.ProcessWagerTransaction(&wallet, &pending, &reference, ledgerID, now)
+	result, duplicateReversal, err := rejectAlreadyReversed(ctx, dbtx, &pending, &reference, wallet.Version(), now)
 	if err != nil {
 		return false, err
+	}
+	if !duplicateReversal {
+		result, err = domain.ProcessWagerTransaction(&wallet, &pending, &reference, ledgerID, now)
+		if err != nil {
+			return false, err
+		}
 	}
 	if wallet.Version() != previousVersion {
 		if err := persistWallet(ctx, dbtx, wallet, previousVersion); err != nil {

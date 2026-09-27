@@ -58,8 +58,10 @@ bem-sucedida no total. Portanto, uma `BET` processada pode receber `REFUND` ou
 `ROLLBACK`, mas não ambos. É permitido reverter uma `REFUND` com `ROLLBACK`; nesse caso,
 a aposta continua marcada como já estornada pelo `REFUND`, impedindo uma segunda
 reversão direta da `BET`. O domínio valida o tipo e o vínculo da referência; a migration
-002 reforça a exclusividade no PostgreSQL. A tradução de conflitos de unicidade em um
-código estável de rejeição será feita pelo caso de uso da aplicação.
+002 reforça a exclusividade no PostgreSQL. Sob o lock da carteira, o adaptador consulta
+uma reversão bem-sucedida anterior e persiste a segunda tentativa como `REJECTED`, com
+o código estável `REVERSAL_ALREADY_PROCESSED`, sem alterar saldo ou ledger. A constraint
+única permanece como última barreira de integridade.
 
 `NewExternalTransaction` recebe um hash de 32 bytes já calculado pelo caso de uso
 compartilhado entre HTTP e SQS.
@@ -76,7 +78,7 @@ criar ledger; uma reversão que exigiria saldo indisponível usa o código está
 
 Essa atomicidade vale somente dentro desta chamada no processo. Ela não protege contra
 concorrência entre requisições nem substitui uma transação PostgreSQL; bloqueio/controle
-de versão e gravação atômica serão responsabilidade do caso de uso e repositório.
+de versão e gravação atômica são responsabilidade do adaptador PostgreSQL.
 
 ### Persistência PostgreSQL
 
@@ -261,8 +263,7 @@ O Keycloak anuncia `http://127.0.0.1:8080` como hostname canônico e permite bac
 dinâmico. Assim, tokens obtidos no host mantêm o mesmo emissor quando a introspecção é
 feita pela URL interna `http://keycloak:8080` da rede Docker.
 
-## Próximas decisões e trabalho pendente
-
-Ainda está pendente uma auditoria final do mapeamento de conflitos de reversão para
-códigos de rejeição. As estratégias pendentes não serão apresentadas como garantias
-até receberem teste correspondente.
+A exclusividade de reversão é coberta tanto por duas operações concorrentes quanto por
+uma reversão que chegou antes da referência e foi retomada pelo worker. Nos dois casos,
+somente uma operação movimenta saldo; a outra permanece consultável como rejeitada e
+produz `WagerTransactionRejected` na outbox.

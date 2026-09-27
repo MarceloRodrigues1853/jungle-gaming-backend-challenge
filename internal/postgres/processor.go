@@ -95,9 +95,15 @@ func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction dom
 	wallet := lockedWallet
 	initialWalletVersion := wallet.Version()
 
-	result, err := domain.ProcessWagerTransaction(&wallet, &transaction, reference, ledgerEntryID, now)
+	result, duplicateReversal, err := rejectAlreadyReversed(ctx, dbtx, &transaction, reference, wallet.Version(), now)
 	if err != nil {
-		return domain.WagerProcessingResult{}, fmt.Errorf("process transaction in domain: %w", err)
+		return domain.WagerProcessingResult{}, err
+	}
+	if !duplicateReversal {
+		result, err = domain.ProcessWagerTransaction(&wallet, &transaction, reference, ledgerEntryID, now)
+		if err != nil {
+			return domain.WagerProcessingResult{}, fmt.Errorf("process transaction in domain: %w", err)
+		}
 	}
 	if result.WalletVersion != wallet.Version() {
 		return domain.WagerProcessingResult{}, errors.New("domain result wallet version is inconsistent")
@@ -131,6 +137,36 @@ func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction dom
 		return domain.WagerProcessingResult{}, fmt.Errorf("commit financial transaction: %w", err)
 	}
 	return result, nil
+}
+
+// rejectAlreadyReversed transforma a disputa por uma segunda reversão em um
+// resultado persistido e auditável. A constraint única continua sendo a última
+// barreira, enquanto o lock da carteira serializa esta verificação entre instâncias.
+func rejectAlreadyReversed(ctx context.Context, tx pgx.Tx, transaction *domain.WagerTransaction, reference *domain.WagerTransaction, walletVersion int64, now time.Time) (domain.WagerProcessingResult, bool, error) {
+	if transaction == nil || reference == nil ||
+		(transaction.Kind() != domain.TransactionRefund && transaction.Kind() != domain.TransactionRollback) {
+		return domain.WagerProcessingResult{}, false, nil
+	}
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM wager_transactions
+		WHERE reference_transaction_id = $1
+		  AND status = 'PROCESSED'
+		  AND kind IN ('REFUND', 'ROLLBACK')
+		  AND id <> $2
+	)`, reference.ID(), transaction.ID()).Scan(&exists); err != nil {
+		return domain.WagerProcessingResult{}, false, fmt.Errorf("check previous successful reversal: %w", err)
+	}
+	if !exists {
+		return domain.WagerProcessingResult{}, false, nil
+	}
+	if err := transaction.MarkRejected(domain.FailureReversalAlreadyProcessed, now); err != nil {
+		return domain.WagerProcessingResult{}, false, fmt.Errorf("reject duplicate reversal: %w", err)
+	}
+	return domain.WagerProcessingResult{
+		TransactionID: transaction.ID(), Status: domain.TransactionRejected,
+		FailureCode: domain.FailureReversalAlreadyProcessed, WalletVersion: walletVersion,
+	}, true, nil
 }
 
 // registerInboxDelivery cria a identidade durável ou valida uma reentrega do

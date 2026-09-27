@@ -11,6 +11,8 @@ const (
 	FailureInsufficientFunds = "INSUFFICIENT_FUNDS"
 	// FailureReversalInsufficientBalance identifica uma reversão que excederia o saldo.
 	FailureReversalInsufficientBalance = "REVERSAL_INSUFFICIENT_BALANCE"
+	// FailureReversalAlreadyProcessed identifica uma segunda reversão da mesma operação.
+	FailureReversalAlreadyProcessed = "REVERSAL_ALREADY_PROCESSED"
 )
 
 // WagerProcessingResult resume o resultado financeiro aplicado à carteira.
