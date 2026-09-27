@@ -256,9 +256,11 @@ chave estrangeira e depois disputar `FOR UPDATE`, formando um deadlock entre pro
 O teste `internal/e2e` executa três contêineres com pools e memórias independentes,
 dispara a disputa obrigatória e reinicia todos antes de verificar dados e replays. A
 mesma suíte disputa uma operação entre HTTP e SQS, distribui 50 reenvios pelas três
-instâncias e confirma que há somente um débito. Um cenário separado usa o redrive real
-do LocalStack para comprovar a chegada de uma mensagem inválida à DLQ depois de cinco
-recebimentos. O perfil de teste reduz visibility timeout e long polling para um
+instâncias e confirma que há somente um débito. Outro cenário envia simultaneamente
+operações de três carteiras diferentes a três processos e confirma que todas avançam,
+demonstrando que a coordenação não usa lock global. Um cenário separado usa o redrive
+real do LocalStack para comprovar a chegada de uma mensagem inválida à DLQ depois de
+cinco recebimentos. O perfil de teste reduz visibility timeout e long polling para um
 segundo, sem alterar o limite de tentativas.
 
 O Keycloak anuncia `http://127.0.0.1:8080` como hostname canônico e permite backchannel

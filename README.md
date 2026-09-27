@@ -100,8 +100,9 @@ JUNGLE_DISTRIBUTED_TEST=1 go test -v ./internal/e2e -count=1
 No PowerShell, defina `$env:JUNGLE_DISTRIBUTED_TEST = "1"` antes do `go test`. A suíte
 usa Keycloak, PostgreSQL e LocalStack reais. Ela disputa duas apostas de `80.00` em
 processos diferentes, reinicia as três APIs, cruza HTTP e SQS para a mesma operação,
-executa 50 reenvios paralelos e comprova o redrive de uma mensagem inválida para a
-DLQ após cinco recebimentos. Ao final valida saldo, ledger, reconciliação e replays.
+executa 50 reenvios paralelos, processa três carteiras independentes simultaneamente
+e comprova o redrive de uma mensagem inválida para a DLQ após cinco recebimentos. Ao
+final valida saldo, ledger, reconciliação e replays.
 As instâncias usam as portas `8091`, `8092` e `8093`.
 
 ## Componentes principais

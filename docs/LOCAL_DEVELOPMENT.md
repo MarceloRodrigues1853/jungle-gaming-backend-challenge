@@ -122,8 +122,10 @@ Os testes obtêm tokens `client_credentials` reais e usam as portas `8091`, `809
 serviços; após o reinício, confirma saldo `20.00`, dois lançamentos no ledger,
 reconciliação sem diferença e replay idempotente. O segundo envia a mesma aposta
 simultaneamente por HTTP e pela fila real, executa mais 50 reenvios concorrentes e
-confirma um único débito. O terceiro envia um evento inválido e aguarda o redrive real
-para `wager-transactions-dlq.fifo` após cinco recebimentos.
+confirma um único débito. Outro cenário processa três carteiras independentes ao mesmo
+tempo em três instâncias, comprovando a ausência de lock global. O cenário de DLQ envia
+um evento inválido e aguarda o redrive real para `wager-transactions-dlq.fifo` após
+cinco recebimentos.
 
 O perfil distribuído reduz apenas os tempos de espera e visibilidade do consumidor
 para um segundo. Isso mantém a política de cinco recebimentos, mas permite verificar

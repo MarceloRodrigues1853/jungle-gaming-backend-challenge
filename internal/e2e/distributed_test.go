@@ -111,6 +111,33 @@ func TestDistributedHTTPAndSQSShareIdempotency(t *testing.T) {
 	assertWalletBalanceAndLedgerCount(t, client, internalToken, wallet.ID, "75.00", 2)
 }
 
+// TestDistributedIndependentWalletsProgressConcurrently comprova que não existe
+// lock global: três carteiras avançam ao mesmo tempo em três processos distintos.
+func TestDistributedIndependentWalletsProgressConcurrently(t *testing.T) {
+	requireDistributedEnvironment(t)
+	client := &http.Client{Timeout: 10 * time.Second}
+	waitForAPIs(t, client)
+	internalToken := clientCredentialsToken(t, client, "wallet-internal", "wallet-internal-local-secret")
+	providerToken := clientCredentialsToken(t, client, "provider-a", "provider-a-local-secret")
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	wallets := make([]walletResponse, len(distributedEndpoints))
+	requests := make([]wagerRequest, len(distributedEndpoints))
+	for index, endpoint := range distributedEndpoints {
+		playerID := fmt.Sprintf("independent-player-%d-%s", index, suffix)
+		wallets[index] = openWallet(t, client, endpoint, internalToken, playerID)
+		requests[index] = newBetWithAmount(fmt.Sprintf("independent-bet-%d-%s", index, suffix), wallets[index].ID, playerID, "10.00")
+	}
+
+	statuses := submitConcurrently(t, client, providerToken, requests)
+	for index, status := range statuses {
+		if status != http.StatusCreated {
+			t.Fatalf("independent wallet %d status = %d, want 201", index, status)
+		}
+		assertWalletBalanceAndLedgerCount(t, client, internalToken, wallets[index].ID, "90.00", 2)
+	}
+}
+
 // TestDistributedInvalidMessageReachesDLQ comprova o redrive real configurado
 // no LocalStack depois de cinco recebimentos sem confirmação.
 func TestDistributedInvalidMessageReachesDLQ(t *testing.T) {
@@ -208,17 +235,20 @@ func submitConcurrently(t *testing.T, client *http.Client, token string, request
 	t.Helper()
 	statuses := make([]int, len(requests))
 	errorsByRequest := make([]error, len(requests))
+	start := make(chan struct{})
 	var group sync.WaitGroup
 	for index := range requests {
 		group.Add(1)
 		go func(index int) {
 			defer group.Done()
+			<-start
 			encoded, err := json.Marshal(requests[index])
 			if err != nil {
 				errorsByRequest[index] = err
 				return
 			}
-			request, err := http.NewRequest(http.MethodPost, distributedEndpoints[index+1]+"/wagering/transactions", bytes.NewReader(encoded))
+			endpoint := distributedEndpoints[(index+1)%len(distributedEndpoints)]
+			request, err := http.NewRequest(http.MethodPost, endpoint+"/wagering/transactions", bytes.NewReader(encoded))
 			if err != nil {
 				errorsByRequest[index] = err
 				return
@@ -235,6 +265,7 @@ func submitConcurrently(t *testing.T, client *http.Client, token string, request
 			_ = response.Body.Close()
 		}(index)
 	}
+	close(start)
 	group.Wait()
 	for index, err := range errorsByRequest {
 		if err != nil {
