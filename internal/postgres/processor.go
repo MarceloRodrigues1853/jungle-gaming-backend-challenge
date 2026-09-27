@@ -42,6 +42,17 @@ func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction dom
 		}
 	}
 
+	// Operações que podem movimentar saldo bloqueiam a carteira antes de inserir
+	// a transação. Essa ordem única evita o ciclo entre a FK da transação e o
+	// SELECT FOR UPDATE quando processos independentes disputam a mesma carteira.
+	var lockedWallet domain.Wallet
+	if transaction.Status() != domain.TransactionPendingReference {
+		lockedWallet, err = lockWallet(ctx, dbtx, transaction.WalletID(), transaction.PlayerID(), transaction.Money().Currency())
+		if err != nil {
+			return domain.WagerProcessingResult{}, err
+		}
+	}
+
 	inserted, err := insertPendingTransaction(ctx, dbtx, transaction)
 	if err != nil {
 		return domain.WagerProcessingResult{}, err
@@ -81,10 +92,7 @@ func (store *Store) ProcessWagerTransaction(ctx context.Context, transaction dom
 		return result, nil
 	}
 
-	wallet, err := lockWallet(ctx, dbtx, transaction.WalletID(), transaction.PlayerID(), transaction.Money().Currency())
-	if err != nil {
-		return domain.WagerProcessingResult{}, err
-	}
+	wallet := lockedWallet
 	initialWalletVersion := wallet.Version()
 
 	result, err := domain.ProcessWagerTransaction(&wallet, &transaction, reference, ledgerEntryID, now)

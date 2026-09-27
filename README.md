@@ -77,6 +77,18 @@ No Windows sem `gcc`, `go test -race` informa que CGO não está disponível; is
 uma limitação do host, não uma substituição da suíte normal. Os testes de integração
 criam dados com IDs únicos e não apagam o ledger.
 
+Teste distribuído com três processos independentes, após aplicar as migrations:
+
+```sh
+docker compose --profile distributed up --build -d api-1 api-2 api-3
+JUNGLE_DISTRIBUTED_TEST=1 go test -v ./internal/e2e -count=1
+```
+
+No PowerShell, defina `$env:JUNGLE_DISTRIBUTED_TEST = "1"` antes do `go test`. O teste
+usa Keycloak e PostgreSQL reais, envia as duas apostas concorrentes de `80.00` para
+processos diferentes, reinicia as três APIs e então valida saldo, ledger,
+reconciliação e replays. As instâncias usam as portas `8091`, `8092` e `8093`.
+
 ## Componentes principais
 
 - `internal/domain`: dinheiro, carteira, transações, ledger e invariantes;
@@ -94,8 +106,8 @@ criam dados com IDs únicos e não apagam o ledger.
 - tracing e dashboards não foram adicionados, pois são diferenciais opcionais;
 - o ambiente local usa credenciais públicas exclusivamente para desenvolvimento;
 - as migrations são aplicadas explicitamente antes da API e não pelo binário;
-- o cenário de três processos é coberto pela estratégia SQL e testes concorrentes,
-  mas ainda deve receber um script dedicado de demonstração multi-instância.
+- o teste distribuído requer Docker e é opt-in para não alterar o ambiente durante
+  uma execução comum de `go test ./...`.
 
 ---
 

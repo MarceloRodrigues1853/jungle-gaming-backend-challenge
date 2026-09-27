@@ -246,10 +246,18 @@ de reconciliação. As séries usam apenas labels de cardinalidade limitada; IDs
 payloads financeiros não aparecem nas métricas. Divergências também produzem log JSON
 com `walletId` e quantidade de lançamentos, sem registrar valores financeiros.
 
+O lock da carteira é adquirido antes da inserção de uma nova transação que possa
+movimentar saldo. A ordem é intencional: inserir primeiro poderia manter um lock de
+chave estrangeira e depois disputar `FOR UPDATE`, formando um deadlock entre processos.
+O teste `internal/e2e` executa três contêineres com pools e memórias independentes,
+dispara a disputa obrigatória e reinicia todos antes de verificar dados e replays.
+
+O Keycloak anuncia `http://127.0.0.1:8080` como hostname canônico e permite backchannel
+dinâmico. Assim, tokens obtidos no host mantêm o mesmo emissor quando a introspecção é
+feita pela URL interna `http://keycloak:8080` da rede Docker.
+
 ## Próximas decisões e trabalho pendente
 
-Ainda estão pendentes o mapeamento de conflitos de reversão para códigos de rejeição e testes de concorrência
-distribuída com pelo menos três processos independentes. Os testes PostgreSQL locais já
-cobrem replay e operações simultâneas, mas não substituem esse cenário multi-processo.
-As estratégias para esses pontos serão documentadas junto com cada etapa, antes de serem
-apresentadas como garantias da solução.
+Ainda está pendente uma auditoria final do mapeamento de conflitos de reversão para
+códigos de rejeição. As estratégias pendentes não serão apresentadas como garantias
+até receberem teste correspondente.

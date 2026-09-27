@@ -87,6 +87,28 @@ concorrência, retries e atraso da outbox, latência financeira e divergências 
 reconciliação. Identificadores de jogador, carteira, transação e provedor não são
 usados como labels.
 
+## Teste distribuído com três processos
+
+Depois de subir as dependências e aplicar as migrations, inicie o perfil distribuído:
+
+```sh
+docker compose --profile distributed up --build -d api-1 api-2 api-3
+JUNGLE_DISTRIBUTED_TEST=1 go test -v ./internal/e2e -count=1
+```
+
+No PowerShell:
+
+```powershell
+docker compose --profile distributed up --build -d api-1 api-2 api-3
+$env:JUNGLE_DISTRIBUTED_TEST = "1"
+go test -v ./internal/e2e -count=1
+```
+
+O teste obtém tokens `client_credentials` reais, usa as portas `8091`, `8092` e
+`8093`, disputa duas apostas sobre a mesma carteira e reinicia os três serviços. Após
+o reinício, ele confirma saldo `20.00`, dois lançamentos no ledger (abertura e um
+débito), reconciliação sem diferença e replay idempotente das duas operações.
+
 ## Token no Postman
 
 Crie uma requisição `POST`:
