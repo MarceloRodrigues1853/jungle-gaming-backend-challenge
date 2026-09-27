@@ -32,7 +32,7 @@ func (store *Store) ClaimOutbox(ctx context.Context, workerID string, now time.T
 	SET locked_by = $3, locked_until = $4, attempts = event.attempts + 1
 	FROM candidates
 	WHERE event.event_id = candidates.event_id
-	RETURNING event.event_id, event.aggregate_id, event.event_type, event.payload, event.attempts`,
+	RETURNING event.event_id, event.aggregate_id, event.event_type, event.payload, event.attempts, event.occurred_at`,
 		now, limit, workerID, now.Add(lockDuration))
 	if err != nil {
 		return nil, fmt.Errorf("claim outbox events: %w", err)
@@ -41,7 +41,7 @@ func (store *Store) ClaimOutbox(ctx context.Context, workerID string, now time.T
 	var events []application.PendingOutboxEvent
 	for rows.Next() {
 		var event application.PendingOutboxEvent
-		if err := rows.Scan(&event.ID, &event.AggregateID, &event.Type, &event.Payload, &event.Attempts); err != nil {
+		if err := rows.Scan(&event.ID, &event.AggregateID, &event.Type, &event.Payload, &event.Attempts, &event.OccurredAt); err != nil {
 			return nil, fmt.Errorf("scan claimed outbox event: %w", err)
 		}
 		events = append(events, event)

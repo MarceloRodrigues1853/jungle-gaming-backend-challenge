@@ -34,6 +34,11 @@ type Submitter interface {
 	SubmitFromInbox(context.Context, string, string, application.SubmitWagerCommand, application.InboxDelivery) (domain.WagerProcessingResult, error)
 }
 
+// Metrics recebe tentativas sem conhecer o conteúdo financeiro da mensagem.
+type Metrics interface {
+	ObserveSQSRetry(attempt int, dlqCandidate bool)
+}
+
 // Consumer busca mensagens em lotes pequenos e só as remove após o commit.
 type Consumer struct {
 	client            Client
@@ -45,19 +50,22 @@ type Consumer struct {
 	visibilityTimeout int32
 	maxMessages       int32
 	clock             func() time.Time
+	metrics           Metrics
+	maxReceiveCount   int
 }
 
 // New valida a configuração operacional do consumidor.
-func New(client Client, submitter Submitter, logger *slog.Logger, queueURL, consumerName string, waitTimeSeconds, visibilityTimeout, maxMessages int32) (*Consumer, error) {
+func New(client Client, submitter Submitter, logger *slog.Logger, metrics Metrics, queueURL, consumerName string, waitTimeSeconds, visibilityTimeout, maxMessages int32, maxReceiveCount int) (*Consumer, error) {
 	if client == nil || submitter == nil || logger == nil || strings.TrimSpace(queueURL) == "" || strings.TrimSpace(consumerName) == "" {
 		return nil, errors.New("SQS client, submitter, logger, queue URL, and consumer name are required")
 	}
-	if waitTimeSeconds < 0 || waitTimeSeconds > 20 || visibilityTimeout <= 0 || maxMessages <= 0 || maxMessages > 10 {
+	if waitTimeSeconds < 0 || waitTimeSeconds > 20 || visibilityTimeout <= 0 || maxMessages <= 0 || maxMessages > 10 || maxReceiveCount <= 0 {
 		return nil, errors.New("invalid SQS polling configuration")
 	}
-	return &Consumer{client: client, submitter: submitter, logger: logger,
+	return &Consumer{client: client, submitter: submitter, logger: logger, metrics: metrics,
 		queueURL: queueURL, consumerName: consumerName, waitTimeSeconds: waitTimeSeconds,
-		visibilityTimeout: visibilityTimeout, maxMessages: maxMessages, clock: time.Now}, nil
+		visibilityTimeout: visibilityTimeout, maxMessages: maxMessages, clock: time.Now,
+		maxReceiveCount: maxReceiveCount}, nil
 }
 
 // Run usa long polling e interrompe novas buscas assim que o contexto é cancelado.
@@ -123,11 +131,15 @@ func (consumer *Consumer) process(ctx context.Context, message types.Message) er
 // deferMessage aplica backoff pela visibilidade; após o limite configurado no
 // redrive, o próprio SQS move a mensagem para a DLQ.
 func (consumer *Consumer) deferMessage(ctx context.Context, message types.Message) {
+	attempt := receiveCount(message)
+	if consumer.metrics != nil {
+		consumer.metrics.ObserveSQSRetry(attempt, attempt >= consumer.maxReceiveCount)
+	}
 	receipt := aws.ToString(message.ReceiptHandle)
 	if receipt == "" {
 		return
 	}
-	seconds := consumer.visibilityTimeout * int32(receiveCount(message))
+	seconds := consumer.visibilityTimeout * int32(attempt)
 	if seconds > 300 {
 		seconds = 300
 	}

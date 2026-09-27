@@ -10,6 +10,7 @@ import (
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/application"
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/auth"
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/httpapi"
+	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/observability"
 	postgresstore "github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
@@ -21,6 +22,7 @@ func NewApp() *fx.App {
 		fx.Provide(
 			LoadConfig,
 			newLogger,
+			observability.NewMetrics,
 			newPostgresPool,
 			postgresstore.NewStore,
 			newIDGenerator,
@@ -96,6 +98,6 @@ func newWalletService(store *postgresstore.Store, ids application.IDGenerator) (
 }
 
 // newHTTPHandler conecta os adaptadores concretos ao contrato HTTP.
-func newHTTPHandler(introspector *auth.Introspector, wagers *application.WagerService, wallets *application.WalletService, store *postgresstore.Store, readiness *Readiness) (http.Handler, error) {
-	return httpapi.NewHandler(introspector, wagers, wallets, readiness, store)
+func newHTTPHandler(introspector *auth.Introspector, wagers *application.WagerService, wallets *application.WalletService, store *postgresstore.Store, readiness *Readiness, metrics *observability.Metrics, logger *slog.Logger) (http.Handler, error) {
+	return httpapi.NewHandler(introspector, wagers, wallets, readiness, store, metrics, logger)
 }

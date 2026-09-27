@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"strconv"
@@ -40,6 +41,14 @@ type Readiness interface {
 	Ping(context.Context) error
 }
 
+// Metrics publica o endpoint e recebe somente sinais agregados da camada HTTP.
+type Metrics interface {
+	http.Handler
+	ObserveWager(status string, replay bool, elapsed time.Duration)
+	ObserveConcurrencyConflict()
+	ObserveReconciliationDivergence()
+}
+
 // Handler agrupa as dependências dos endpoints financeiros.
 type Handler struct {
 	authenticator Authenticator
@@ -47,17 +56,21 @@ type Handler struct {
 	wallets       WalletManager
 	readiness     Readiness
 	queries       application.FinancialQueries
+	metrics       Metrics
+	logger        *slog.Logger
 }
 
 // NewHandler cria as rotas e aplica autenticação antes dos endpoints protegidos.
-func NewHandler(authenticator Authenticator, wagers WagerSubmitter, wallets WalletManager, readiness Readiness, queries application.FinancialQueries) (http.Handler, error) {
-	if authenticator == nil || wagers == nil || wallets == nil || readiness == nil || queries == nil {
-		return nil, errors.New("HTTP authenticator, wager service, wallet service, and readiness are required")
+func NewHandler(authenticator Authenticator, wagers WagerSubmitter, wallets WalletManager, readiness Readiness, queries application.FinancialQueries, metrics Metrics, logger *slog.Logger) (http.Handler, error) {
+	if authenticator == nil || wagers == nil || wallets == nil || readiness == nil || queries == nil || metrics == nil || logger == nil {
+		return nil, errors.New("HTTP dependencies, metrics, and logger are required")
 	}
-	handler := &Handler{authenticator: authenticator, wagers: wagers, wallets: wallets, readiness: readiness, queries: queries}
+	handler := &Handler{authenticator: authenticator, wagers: wagers, wallets: wallets,
+		readiness: readiness, queries: queries, metrics: metrics, logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", handler.live)
 	mux.HandleFunc("GET /health/ready", handler.ready)
+	mux.Handle("GET /metrics", metrics)
 	mux.Handle("POST /wagering/transactions", handler.requireProvider(http.HandlerFunc(handler.submitWager)))
 	mux.Handle("POST /wallets", handler.requireInternal(http.HandlerFunc(handler.openWallet)))
 	mux.Handle("GET /wallets/{walletId}", handler.requireInternal(http.HandlerFunc(handler.getWallet)))
@@ -109,6 +122,11 @@ func (handler *Handler) reconcileWallet(writer http.ResponseWriter, request *htt
 	if !exists {
 		writeError(writer, http.StatusNotFound, "WALLET_NOT_FOUND", "the wallet was not found")
 		return
+	}
+	if !result.Consistent {
+		handler.metrics.ObserveReconciliationDivergence()
+		handler.logger.Warn("wallet reconciliation divergence", "walletId", result.WalletID,
+			"checkedEntries", result.CheckedEntries)
 	}
 	writeJSON(writer, http.StatusOK, reconciliationResponse{WalletID: result.WalletID,
 		StoredBalance: moneyFromDomain(result.StoredBalance), CalculatedBalance: moneyFromDomain(result.CalculatedBalance),
@@ -218,6 +236,7 @@ type healthResponse struct {
 
 // submitWager valida o contrato HTTP e delega a regra ao caso de uso.
 func (handler *Handler) submitWager(writer http.ResponseWriter, request *http.Request) {
+	startedAt := time.Now()
 	if !hasJSONContentType(request.Header.Get("Content-Type")) {
 		writeError(writer, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json")
 		return
@@ -245,9 +264,13 @@ func (handler *Handler) submitWager(writer http.ResponseWriter, request *http.Re
 
 	result, err := handler.wagers.Submit(request.Context(), principal.ProviderID, idempotencyKey, body.command())
 	if err != nil {
+		if errors.Is(err, application.ErrConcurrencyConflict) {
+			handler.metrics.ObserveConcurrencyConflict()
+		}
 		handler.writeSubmitError(writer, err)
 		return
 	}
+	handler.metrics.ObserveWager(string(result.Status), result.IdempotentReplay, time.Since(startedAt))
 	writeWagerResult(writer, result)
 }
 

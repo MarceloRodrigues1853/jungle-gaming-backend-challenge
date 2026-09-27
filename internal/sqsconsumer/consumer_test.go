@@ -19,8 +19,8 @@ import (
 func TestConsumerCommitsBeforeDeletingMessage(t *testing.T) {
 	client := &clientSpy{}
 	submitter := &submitterSpy{onSubmit: func() { client.committed = true }}
-	consumer, err := New(client, submitter, slog.New(slog.NewTextHandler(io.Discard, nil)),
-		"queue-url", "wager-consumer", 0, 30, 1)
+	consumer, err := New(client, submitter, slog.New(slog.NewTextHandler(io.Discard, nil)), nil,
+		"queue-url", "wager-consumer", 0, 30, 1, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,8 +41,8 @@ func TestConsumerCommitsBeforeDeletingMessage(t *testing.T) {
 // não sejam apagadas e possam atingir a DLQ após o limite do broker.
 func TestConsumerLeavesInvalidMessageForRedrive(t *testing.T) {
 	client := &clientSpy{}
-	consumer, err := New(client, &submitterSpy{}, slog.New(slog.NewTextHandler(io.Discard, nil)),
-		"queue-url", "wager-consumer", 0, 30, 1)
+	consumer, err := New(client, &submitterSpy{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil,
+		"queue-url", "wager-consumer", 0, 30, 1, 5)
 	if err != nil {
 		t.Fatal(err)
 	}

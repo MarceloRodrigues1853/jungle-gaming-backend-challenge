@@ -22,6 +22,8 @@ var (
 	ErrIdempotencyConflict = errors.New("idempotency conflict")
 	// ErrWalletNotFound indica que a carteira informada não existe para a operação.
 	ErrWalletNotFound = errors.New("wallet not found")
+	// ErrConcurrencyConflict permite contabilizar uma disputa transitória esgotada.
+	ErrConcurrencyConflict = errors.New("concurrency conflict")
 )
 
 // MoneyInput representa o contrato textual de dinheiro compartilhado por HTTP e SQS.

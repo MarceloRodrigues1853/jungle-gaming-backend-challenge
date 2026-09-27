@@ -26,6 +26,7 @@ variáveis `HTTP_ADDRESS`, `DATABASE_URL`, `OIDC_INTROSPECTION_URL`,
 `PROVIDER_CLIENT_ID`, `PROVIDER_ID`, `AWS_REGION`, `SQS_ENDPOINT`,
 `SQS_OUTPUT_QUEUE_URL`, `SQS_INPUT_QUEUE_URL`, `SQS_CONSUMER_NAME`,
 `SQS_WAIT_TIME_SECONDS`, `SQS_VISIBILITY_TIMEOUT_SECONDS`, `SQS_MAX_MESSAGES`,
+`SQS_MAX_RECEIVE_COUNT`,
 `OUTBOX_POLL_INTERVAL`, `OUTBOX_LOCK_DURATION`, `OUTBOX_BATCH_SIZE`,
 `REFERENCE_POLL_INTERVAL`, `REFERENCE_LOCK_DURATION`, `REFERENCE_BATCH_SIZE` e
 `REFERENCE_MAX_ATTEMPTS`.
@@ -74,10 +75,17 @@ são aceitos no endpoint de apostas, e tokens de `provider-a` não concedem pape
 ```http
 GET http://127.0.0.1:8090/health/live
 GET http://127.0.0.1:8090/health/ready
+GET http://127.0.0.1:8090/metrics
 ```
 
 `live` confirma o processo HTTP. `ready` consulta PostgreSQL, fila de entrada e fila
 de saída, retornando `503` quando qualquer dependência não está pronta.
+
+`metrics` é público para coleta local e usa o formato Prometheus. Ele expõe resultados
+por status, replays idempotentes, retries e candidatos à DLQ do SQS, conflitos de
+concorrência, retries e atraso da outbox, latência financeira e divergências de
+reconciliação. Identificadores de jogador, carteira, transação e provedor não são
+usados como labels.
 
 ## Token no Postman
 

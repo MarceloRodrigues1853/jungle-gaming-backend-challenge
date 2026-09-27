@@ -239,10 +239,16 @@ escrita, cabeçalhos e conexões ociosas. Instruções de Postman estão em
 usa prazo de dois segundos para consultar PostgreSQL e os destinos SQS de entrada e
 saída; devolve `503` se qualquer dependência não estiver disponível.
 
+`GET /metrics` expõe métricas no formato Prometheus por processo. São contabilizados
+resultados por estado, replays, retries e candidatos à DLQ do consumidor, conflitos
+de concorrência, retries e atraso da outbox, latência de processamento e divergências
+de reconciliação. As séries usam apenas labels de cardinalidade limitada; IDs e
+payloads financeiros não aparecem nas métricas. Divergências também produzem log JSON
+com `walletId` e quantidade de lançamentos, sem registrar valores financeiros.
+
 ## Próximas decisões e trabalho pendente
 
-Ainda estão pendentes o mapeamento de conflitos de reversão para códigos de rejeição,
-métricas adicionais e testes de concorrência
+Ainda estão pendentes o mapeamento de conflitos de reversão para códigos de rejeição e testes de concorrência
 distribuída com pelo menos três processos independentes. Os testes PostgreSQL locais já
 cobrem replay e operações simultâneas, mas não substituem esse cenário multi-processo.
 As estratégias para esses pontos serão documentadas junto com cada etapa, antes de serem

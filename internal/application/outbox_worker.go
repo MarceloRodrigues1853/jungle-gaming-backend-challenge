@@ -13,6 +13,13 @@ type PendingOutboxEvent struct {
 	ID, AggregateID, Type string
 	Payload               []byte
 	Attempts              int
+	OccurredAt            time.Time
+}
+
+// OutboxMetrics recebe somente sinais operacionais, sem conhecer payloads.
+type OutboxMetrics interface {
+	ObserveOutboxRetry()
+	ObserveOutboxLag(time.Duration)
 }
 
 // OutboxRepository coordena reservas concorrentes e confirmações duráveis.
@@ -37,19 +44,24 @@ type OutboxWorker struct {
 	lockDuration time.Duration
 	batchSize    int
 	clock        func() time.Time
+	metrics      OutboxMetrics
 }
 
 // NewOutboxWorker valida a configuração necessária ao loop de publicação.
-func NewOutboxWorker(repository OutboxRepository, publisher EventPublisher, logger *slog.Logger, workerID string, pollInterval, lockDuration time.Duration, batchSize int) (*OutboxWorker, error) {
+func NewOutboxWorker(repository OutboxRepository, publisher EventPublisher, logger *slog.Logger, workerID string, pollInterval, lockDuration time.Duration, batchSize int, metrics ...OutboxMetrics) (*OutboxWorker, error) {
 	if repository == nil || publisher == nil || logger == nil || workerID == "" {
 		return nil, errors.New("outbox repository, publisher, logger, and worker id are required")
 	}
 	if pollInterval <= 0 || lockDuration <= 0 || batchSize <= 0 {
 		return nil, errors.New("outbox timing and batch size must be positive")
 	}
-	return &OutboxWorker{repository: repository, publisher: publisher, logger: logger,
+	worker := &OutboxWorker{repository: repository, publisher: publisher, logger: logger,
 		workerID: workerID, pollInterval: pollInterval, lockDuration: lockDuration,
-		batchSize: batchSize, clock: time.Now}, nil
+		batchSize: batchSize, clock: time.Now}
+	if len(metrics) > 0 {
+		worker.metrics = metrics[0]
+	}
+	return worker, nil
 }
 
 // Run continua até o contexto ser cancelado e respeita shutdown sem buscar novo trabalho.
@@ -75,6 +87,15 @@ func (worker *OutboxWorker) ProcessBatch(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("claim outbox: %w", err)
 	}
+	oldestLag := time.Duration(0)
+	for _, event := range events {
+		if !event.OccurredAt.IsZero() && now.Sub(event.OccurredAt) > oldestLag {
+			oldestLag = now.Sub(event.OccurredAt)
+		}
+	}
+	if worker.metrics != nil {
+		worker.metrics.ObserveOutboxLag(oldestLag)
+	}
 	for _, event := range events {
 		if err := worker.publisher.Publish(ctx, event); err != nil {
 			nextAttempt := now.Add(outboxBackoff(event.Attempts))
@@ -82,6 +103,9 @@ func (worker *OutboxWorker) ProcessBatch(ctx context.Context) error {
 				return fmt.Errorf("reschedule outbox event %s after publish error: %w", event.ID, retryErr)
 			}
 			worker.logger.Warn("outbox event rescheduled", "eventId", event.ID, "eventType", event.Type, "attempt", event.Attempts)
+			if worker.metrics != nil {
+				worker.metrics.ObserveOutboxRetry()
+			}
 			continue
 		}
 		if err := worker.repository.MarkOutboxPublished(ctx, event.ID, worker.workerID, worker.clock().UTC()); err != nil {

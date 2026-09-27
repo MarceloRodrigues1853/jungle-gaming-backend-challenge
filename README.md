@@ -45,6 +45,7 @@ A aplicação estará em `http://127.0.0.1:8090`. Verifique as dependências:
 ```sh
 curl http://127.0.0.1:8090/health/live
 curl http://127.0.0.1:8090/health/ready
+curl http://127.0.0.1:8090/metrics
 ```
 
 O readiness somente retorna `200` quando PostgreSQL, fila de entrada e fila de saída
@@ -83,13 +84,14 @@ criam dados com IDs únicos e não apagam o ledger.
 - `internal/postgres`: transações SQL, locks, inbox, outbox e consultas;
 - `internal/httpapi`: autenticação e contratos HTTP;
 - `internal/sqsconsumer` e `internal/sqsoutbox`: entrada e publicação FIFO;
+- `internal/observability`: métricas operacionais no formato Prometheus;
 - `internal/bootstrap`: composição e lifecycle Uber Fx;
 - `ARCHITECTURE.md`: decisões, garantias e limitações;
 - `migrations/README.md`: aplicação e reversão do schema.
 
 ## Limitações conhecidas
 
-- métricas Prometheus e tracing não foram adicionados;
+- tracing e dashboards não foram adicionados, pois são diferenciais opcionais;
 - o ambiente local usa credenciais públicas exclusivamente para desenvolvimento;
 - as migrations são aplicadas explicitamente antes da API e não pelo binário;
 - o cenário de três processos é coberto pela estratégia SQL e testes concorrentes,

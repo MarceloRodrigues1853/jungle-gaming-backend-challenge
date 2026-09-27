@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/application"
+	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/observability"
 	postgresstore "github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/postgres"
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/sqsoutbox"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -33,13 +34,13 @@ func newOutboxPublisher(client *sqs.Client, config Config) (*sqsoutbox.Publisher
 	return sqsoutbox.NewPublisher(client, config.SQSOutputQueueURL)
 }
 
-func newOutboxWorker(store *postgresstore.Store, publisher *sqsoutbox.Publisher, logger *slog.Logger, ids application.IDGenerator, config Config) (*application.OutboxWorker, error) {
+func newOutboxWorker(store *postgresstore.Store, publisher *sqsoutbox.Publisher, logger *slog.Logger, metrics *observability.Metrics, ids application.IDGenerator, config Config) (*application.OutboxWorker, error) {
 	workerID, err := ids.NewID()
 	if err != nil {
 		return nil, err
 	}
 	return application.NewOutboxWorker(store, publisher, logger, workerID,
-		config.OutboxPollInterval, config.OutboxLockDuration, config.OutboxBatchSize)
+		config.OutboxPollInterval, config.OutboxLockDuration, config.OutboxBatchSize, metrics)
 }
 
 // registerOutboxWorker inicia e encerra o loop junto com o lifecycle do Fx.

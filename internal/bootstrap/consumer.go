@@ -6,14 +6,15 @@ import (
 	"log/slog"
 
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/application"
+	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/observability"
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/sqsconsumer"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"go.uber.org/fx"
 )
 
-func newSQSConsumer(client *sqs.Client, wagers *application.WagerService, logger *slog.Logger, config Config) (*sqsconsumer.Consumer, error) {
-	return sqsconsumer.New(client, wagers, logger, config.SQSInputQueueURL, config.SQSConsumerName,
-		int32(config.SQSWaitTimeSeconds), int32(config.SQSVisibilitySeconds), int32(config.SQSMaxMessages))
+func newSQSConsumer(client *sqs.Client, wagers *application.WagerService, logger *slog.Logger, metrics *observability.Metrics, config Config) (*sqsconsumer.Consumer, error) {
+	return sqsconsumer.New(client, wagers, logger, metrics, config.SQSInputQueueURL, config.SQSConsumerName,
+		int32(config.SQSWaitTimeSeconds), int32(config.SQSVisibilitySeconds), int32(config.SQSMaxMessages), config.SQSMaxReceiveCount)
 }
 
 // registerSQSConsumer acompanha o lifecycle do Fx: cancela o long polling e

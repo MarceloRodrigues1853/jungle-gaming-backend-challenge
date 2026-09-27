@@ -26,6 +26,7 @@ type Config struct {
 	SQSWaitTimeSeconds    int
 	SQSVisibilitySeconds  int
 	SQSMaxMessages        int
+	SQSMaxReceiveCount    int
 	OutboxPollInterval    time.Duration
 	OutboxLockDuration    time.Duration
 	OutboxBatchSize       int
@@ -54,6 +55,7 @@ func LoadConfig() (Config, error) {
 		SQSWaitTimeSeconds:    integerOrDefault("SQS_WAIT_TIME_SECONDS", 10),
 		SQSVisibilitySeconds:  integerOrDefault("SQS_VISIBILITY_TIMEOUT_SECONDS", 30),
 		SQSMaxMessages:        integerOrDefault("SQS_MAX_MESSAGES", 10),
+		SQSMaxReceiveCount:    integerOrDefault("SQS_MAX_RECEIVE_COUNT", 5),
 		OutboxPollInterval:    durationOrDefault("OUTBOX_POLL_INTERVAL", time.Second),
 		OutboxLockDuration:    durationOrDefault("OUTBOX_LOCK_DURATION", 30*time.Second),
 		OutboxBatchSize:       integerOrDefault("OUTBOX_BATCH_SIZE", 20),
@@ -69,7 +71,7 @@ func LoadConfig() (Config, error) {
 		strings.TrimSpace(config.AWSRegion) == "" || strings.TrimSpace(config.SQSEndpoint) == "" ||
 		strings.TrimSpace(config.SQSOutputQueueURL) == "" || strings.TrimSpace(config.SQSInputQueueURL) == "" ||
 		strings.TrimSpace(config.SQSConsumerName) == "" || config.SQSWaitTimeSeconds < 0 || config.SQSWaitTimeSeconds > 20 ||
-		config.SQSVisibilitySeconds <= 0 || config.SQSMaxMessages <= 0 || config.SQSMaxMessages > 10 || config.OutboxPollInterval <= 0 ||
+		config.SQSVisibilitySeconds <= 0 || config.SQSMaxMessages <= 0 || config.SQSMaxMessages > 10 || config.SQSMaxReceiveCount <= 0 || config.OutboxPollInterval <= 0 ||
 		config.OutboxLockDuration <= 0 || config.OutboxBatchSize <= 0 ||
 		config.ReferencePollInterval <= 0 || config.ReferenceLockDuration <= 0 ||
 		config.ReferenceBatchSize <= 0 || config.ReferenceMaxAttempts <= 0 {

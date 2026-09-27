@@ -3,6 +3,8 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,7 +14,12 @@ import (
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/application"
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/auth"
 	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/domain"
+	"github.com/MarceloRodrigues1853/jungle-gaming-backend-challenge/internal/observability"
 )
+
+func testOperationalDependencies() (*observability.Metrics, *slog.Logger) {
+	return observability.NewMetrics(), slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 // TestSubmitWagerUsesAuthenticatedProvider valida o caminho HTTP completo até o caso de uso.
 func TestSubmitWagerUsesAuthenticatedProvider(t *testing.T) {
@@ -129,7 +136,8 @@ func TestSubmitWagerRejectsAmbiguousJSON(t *testing.T) {
 func TestWalletRoutesRequireInternalIdentity(t *testing.T) {
 	t.Parallel()
 	manager := &walletManagerStub{}
-	handler, err := NewHandler(&authenticatorStub{principal: auth.Principal{Role: auth.RoleProvider, ProviderID: "provider-a"}}, &submitterSpy{}, manager, readinessStub{}, financialQueriesStub{})
+	metrics, logger := testOperationalDependencies()
+	handler, err := NewHandler(&authenticatorStub{principal: auth.Principal{Role: auth.RoleProvider, ProviderID: "provider-a"}}, &submitterSpy{}, manager, readinessStub{}, financialQueriesStub{}, metrics, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +159,8 @@ func TestOpenAndGetWalletExposeExactMoney(t *testing.T) {
 	balance, _ := domain.ParseMoney("100.00", "BRL")
 	wallet, _ := domain.NewWalletWithBalance("wallet-1", "player-1", balance, now)
 	manager := &walletManagerStub{wallet: wallet, exists: true}
-	handler, err := NewHandler(&authenticatorStub{principal: auth.Principal{Role: auth.RoleInternal}}, &submitterSpy{}, manager, readinessStub{}, financialQueriesStub{})
+	metrics, logger := testOperationalDependencies()
+	handler, err := NewHandler(&authenticatorStub{principal: auth.Principal{Role: auth.RoleInternal}}, &submitterSpy{}, manager, readinessStub{}, financialQueriesStub{}, metrics, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +187,8 @@ func TestOpenAndGetWalletExposeExactMoney(t *testing.T) {
 func TestHealthChecksArePublicAndReadinessUsesPostgres(t *testing.T) {
 	t.Parallel()
 
-	liveHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, &walletManagerStub{}, readinessStub{}, financialQueriesStub{})
+	metrics, logger := testOperationalDependencies()
+	liveHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, &walletManagerStub{}, readinessStub{}, financialQueriesStub{}, metrics, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,8 +197,14 @@ func TestHealthChecksArePublicAndReadinessUsesPostgres(t *testing.T) {
 	if live.Code != http.StatusOK {
 		t.Fatalf("liveness status = %d", live.Code)
 	}
+	metricResponse := httptest.NewRecorder()
+	liveHandler.ServeHTTP(metricResponse, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if metricResponse.Code != http.StatusOK || !strings.Contains(metricResponse.Body.String(), "jungle_wager_results_total") {
+		t.Fatalf("metrics status/body = %d/%s", metricResponse.Code, metricResponse.Body.String())
+	}
 
-	unreadyHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, &walletManagerStub{}, readinessStub{err: errors.New("postgres unavailable")}, financialQueriesStub{})
+	unreadyMetrics, unreadyLogger := testOperationalDependencies()
+	unreadyHandler, err := NewHandler(&authenticatorStub{}, &submitterSpy{}, &walletManagerStub{}, readinessStub{err: errors.New("postgres unavailable")}, financialQueriesStub{}, unreadyMetrics, unreadyLogger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,8 +225,9 @@ func TestQueryRoutesEnforceProviderAndExposeExactMoney(t *testing.T) {
 		Kind: domain.TransactionBet, Money: money, Status: domain.TransactionProcessed,
 		ResultBalance: money, HasResultBalance: true, CreatedAt: fixedHTTPTime(), UpdatedAt: fixedHTTPTime(),
 	}, transactionExists: true}
+	metrics, logger := testOperationalDependencies()
 	handler, err := NewHandler(&authenticatorStub{principal: auth.Principal{Role: auth.RoleProvider, ProviderID: "provider-a"}},
-		&submitterSpy{}, &walletManagerStub{}, readinessStub{}, queries)
+		&submitterSpy{}, &walletManagerStub{}, readinessStub{}, queries, metrics, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +292,8 @@ func (spy *submitterSpy) Submit(_ context.Context, providerID, idempotencyKey st
 // testHandler falha imediatamente se as dependências do roteador forem inválidas.
 func testHandler(t *testing.T, authenticator Authenticator, submitter WagerSubmitter) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(authenticator, submitter, &walletManagerStub{}, readinessStub{}, financialQueriesStub{})
+	metrics, logger := testOperationalDependencies()
+	handler, err := NewHandler(authenticator, submitter, &walletManagerStub{}, readinessStub{}, financialQueriesStub{}, metrics, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

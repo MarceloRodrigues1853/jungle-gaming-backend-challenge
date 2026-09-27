@@ -16,6 +16,7 @@ services:
       SQS_ENDPOINT: http://localstack:4566
       SQS_INPUT_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions.fifo
       SQS_OUTPUT_QUEUE_URL: http://localstack:4566/000000000000/jungle-events.fifo
+      SQS_MAX_RECEIVE_COUNT: 5
     ports:
       - "127.0.0.1:8090:8090"
     depends_on:
