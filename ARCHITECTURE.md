@@ -236,13 +236,13 @@ escrita, cabeçalhos e conexões ociosas. Instruções de Postman estão em
 `docs/LOCAL_DEVELOPMENT.md`.
 
 `GET /health/live` confirma somente que o processo HTTP responde. `GET /health/ready`
-usa prazo de dois segundos para consultar o PostgreSQL e devolve `503` se a dependência
-não estiver disponível. A verificação ativa do SQS no readiness continua pendente.
+usa prazo de dois segundos para consultar PostgreSQL e os destinos SQS de entrada e
+saída; devolve `503` se qualquer dependência não estiver disponível.
 
 ## Próximas decisões e trabalho pendente
 
 Ainda estão pendentes o mapeamento de conflitos de reversão para códigos de rejeição,
-readiness do SQS, métricas adicionais, Dockerfile e testes de concorrência
+métricas adicionais e testes de concorrência
 distribuída com pelo menos três processos independentes. Os testes PostgreSQL locais já
 cobrem replay e operações simultâneas, mas não substituem esse cenário multi-processo.
 As estratégias para esses pontos serão documentadas junto com cada etapa, antes de serem

@@ -4,7 +4,7 @@
 
 - Go na versão declarada em `go.mod`;
 - Docker Desktop com os serviços `postgres`, `keycloak` e `localstack` ativos;
-- migrations 001, 002, 003 e 004 aplicadas conforme `migrations/README.md`.
+- migrations 001, 002, 003, 004 e 005 aplicadas conforme `migrations/README.md`.
 
 Inicie a infraestrutura:
 
@@ -76,8 +76,8 @@ GET http://127.0.0.1:8090/health/live
 GET http://127.0.0.1:8090/health/ready
 ```
 
-`live` confirma o processo HTTP. `ready` consulta o PostgreSQL e retorna `503` quando
-a dependência não está pronta.
+`live` confirma o processo HTTP. `ready` consulta PostgreSQL, fila de entrada e fila
+de saída, retornando `503` quando qualquer dependência não está pronta.
 
 ## Token no Postman
 

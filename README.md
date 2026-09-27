@@ -1,4 +1,103 @@
-# Desafio Backend — Processamento Distribuído de Apostas em Go
+# Solução — Processamento Distribuído de Apostas em Go
+
+Implementação em Go de uma API e workers financeiros com PostgreSQL, Keycloak,
+AWS SQS via LocalStack e composição por Uber Fx. O projeto preserva dinheiro em
+unidades mínimas, mantém ledger append-only, idempotência persistente, inbox/outbox
+transacionais, locks por carteira e recuperação de referências fora de ordem.
+
+## Execução a partir de um checkout limpo
+
+Pré-requisitos: Docker Desktop com Compose e, para executar testes diretamente no
+host, a versão de Go declarada em `go.mod`.
+
+Copie as variáveis locais de exemplo, se quiser sobrescrever os padrões do Compose:
+
+```sh
+cp .env.example .env
+```
+
+Suba primeiro as dependências:
+
+```sh
+docker compose up -d postgres keycloak localstack
+docker compose ps
+```
+
+Em seguida, aplique as migrations na ordem indicada:
+
+```sh
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U jungle_app -d jungle_gaming < migrations/001_financial_core.up.sql
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U jungle_app -d jungle_gaming < migrations/002_reversal_exclusivity.up.sql
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U jungle_app -d jungle_gaming < migrations/003_optional_win_reference.up.sql
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U jungle_app -d jungle_gaming < migrations/004_outbox_claim_owner.up.sql
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U jungle_app -d jungle_gaming < migrations/005_pending_reference_retry.up.sql
+```
+
+Construa e inicie a API:
+
+```sh
+docker compose up --build -d api
+docker compose logs -f api
+```
+
+A aplicação estará em `http://127.0.0.1:8090`. Verifique as dependências:
+
+```sh
+curl http://127.0.0.1:8090/health/live
+curl http://127.0.0.1:8090/health/ready
+```
+
+O readiness somente retorna `200` quando PostgreSQL, fila de entrada e fila de saída
+estão acessíveis. Os exemplos completos de tokens, Postman, SQS, consultas e
+reconciliação estão em [`docs/LOCAL_DEVELOPMENT.md`](docs/LOCAL_DEVELOPMENT.md).
+
+## Verificação
+
+Testes unitários:
+
+```sh
+go test ./...
+go vet ./...
+```
+
+Testes com PostgreSQL real, depois de aplicar as migrations:
+
+```sh
+JUNGLE_TEST_DATABASE_URL="postgres://jungle_app:local_dev_only@127.0.0.1:5432/jungle_gaming?sslmode=disable" go test ./...
+```
+
+Detecção de corrida, em ambiente com compilador C disponível:
+
+```sh
+go test -race ./...
+```
+
+No Windows sem `gcc`, `go test -race` informa que CGO não está disponível; isso é
+uma limitação do host, não uma substituição da suíte normal. Os testes de integração
+criam dados com IDs únicos e não apagam o ledger.
+
+## Componentes principais
+
+- `internal/domain`: dinheiro, carteira, transações, ledger e invariantes;
+- `internal/application`: casos de uso e workers independentes de infraestrutura;
+- `internal/postgres`: transações SQL, locks, inbox, outbox e consultas;
+- `internal/httpapi`: autenticação e contratos HTTP;
+- `internal/sqsconsumer` e `internal/sqsoutbox`: entrada e publicação FIFO;
+- `internal/bootstrap`: composição e lifecycle Uber Fx;
+- `ARCHITECTURE.md`: decisões, garantias e limitações;
+- `migrations/README.md`: aplicação e reversão do schema.
+
+## Limitações conhecidas
+
+- métricas Prometheus e tracing não foram adicionados;
+- o ambiente local usa credenciais públicas exclusivamente para desenvolvimento;
+- as migrations são aplicadas explicitamente antes da API e não pelo binário;
+- o cenário de três processos é coberto pela estratégia SQL e testes concorrentes,
+  mas ainda deve receber um script dedicado de demonstração multi-instância.
+
+---
+
+# Enunciado original — Desafio Backend
 
 Implemente um serviço em **Go**, com **Uber Fx**, para processar operações financeiras de provedores de jogos em um ambiente distribuído.
 

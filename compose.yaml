@@ -1,4 +1,31 @@
 services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      HTTP_ADDRESS: 0.0.0.0:8090
+      DATABASE_URL: postgres://${POSTGRES_USER:-jungle_app}:${POSTGRES_PASSWORD:-local_dev_only}@postgres:5432/${POSTGRES_DB:-jungle_gaming}?sslmode=disable
+      OIDC_INTROSPECTION_URL: http://keycloak:8080/realms/jungle-dev/protocol/openid-connect/token/introspect
+      OIDC_INTROSPECTION_CLIENT_ID: jungle-api
+      OIDC_INTROSPECTION_CLIENT_SECRET: jungle-api-introspection-secret
+      PROVIDER_CLIENT_ID: provider-a
+      PROVIDER_ID: provider-a
+      INTERNAL_CLIENT_ID: wallet-internal
+      AWS_REGION: us-east-1
+      SQS_ENDPOINT: http://localstack:4566
+      SQS_INPUT_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions.fifo
+      SQS_OUTPUT_QUEUE_URL: http://localstack:4566/000000000000/jungle-events.fifo
+    ports:
+      - "127.0.0.1:8090:8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+
   postgres:
     image: postgres:18.6-alpine3.23
     environment:

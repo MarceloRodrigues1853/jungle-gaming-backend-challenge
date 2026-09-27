@@ -28,6 +28,7 @@ func NewApp() *fx.App {
 			newWagerService,
 			newWalletService,
 			newSQSClient,
+			newReadiness,
 			newOutboxPublisher,
 			newOutboxWorker,
 			newSQSConsumer,
@@ -95,6 +96,6 @@ func newWalletService(store *postgresstore.Store, ids application.IDGenerator) (
 }
 
 // newHTTPHandler conecta os adaptadores concretos ao contrato HTTP.
-func newHTTPHandler(introspector *auth.Introspector, wagers *application.WagerService, wallets *application.WalletService, store *postgresstore.Store) (http.Handler, error) {
-	return httpapi.NewHandler(introspector, wagers, wallets, store, store)
+func newHTTPHandler(introspector *auth.Introspector, wagers *application.WagerService, wallets *application.WalletService, store *postgresstore.Store, readiness *Readiness) (http.Handler, error) {
+	return httpapi.NewHandler(introspector, wagers, wallets, readiness, store)
 }
