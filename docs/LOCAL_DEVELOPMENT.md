@@ -166,6 +166,24 @@ client_secret wallet-internal-local-secret
 
 Use esse segundo `access_token` exclusivamente nas rotas `/wallets`.
 
+## Teste de token expirado no Keycloak real
+
+O realm inclui o cliente `provider-expiring-test`, reservado para testes e configurado
+com token de três segundos. Ele não é autorizado pela aplicação normal. Para validar
+emissão, introspecção, credencial inválida e expiração diretamente no Keycloak:
+
+```powershell
+$env:JUNGLE_IDP_TEST = "1"
+go test -v ./internal/e2e -run TestRealKeycloak -count=1
+```
+
+Se o arquivo do realm acabou de ser alterado, recrie somente o serviço para que o modo
+local importe a configuração novamente:
+
+```powershell
+docker compose up -d --force-recreate keycloak
+```
+
 ## Abertura e leitura de carteira
 
 Envie `POST http://127.0.0.1:8090/wallets` com `Authorization: Bearer

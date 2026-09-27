@@ -74,6 +74,12 @@ com as dependências do Compose ativas:
 JUNGLE_BOOTSTRAP_TEST=1 go test -v ./internal/bootstrap -run TestAppStartsAndStopsWithRealDependencies -count=1
 ```
 
+Integração real de autenticação, incluindo token válido, inválido e expirado:
+
+```sh
+JUNGLE_IDP_TEST=1 go test -v ./internal/e2e -run TestRealKeycloak -count=1
+```
+
 Detecção de corrida, em ambiente com compilador C disponível:
 
 ```sh

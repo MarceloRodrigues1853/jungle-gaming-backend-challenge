@@ -185,6 +185,13 @@ explícita para um papel. `provider-a` recebe o papel `PROVIDER` e seu `provider
 autenticada determina tanto o escopo quanto o tipo de operação autorizado. As
 credenciais do realm importado são apenas de desenvolvimento local.
 
+O realm também contém `provider-expiring-test`, um cliente exclusivo da integração de
+autenticação, com token de três segundos. Ele não faz parte da allowlist da aplicação
+em execução. O teste cria um introspector isolado com allowlist explícita para esse
+cliente, confirma o token recém-emitido e depois comprova que o próprio Keycloak marca
+como inativos tanto uma credencial inválida quanto o token após sua expiração. Os
+clientes funcionais mantêm sua validade normal.
+
 O adaptador `internal/httpapi` protege `POST /wagering/transactions` com Bearer token,
 introspecta a credencial e injeta o principal validado no contexto. O `providerId` do
 JSON precisa coincidir com esse principal antes de o caso de uso ser chamado; ele nunca

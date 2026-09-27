@@ -57,6 +57,36 @@
       ]
     },
     {
+      "clientId": "provider-expiring-test",
+      "name": "Short-lived provider used only by authentication integration tests",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "provider-expiring-test-local-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "attributes": {
+        "access.token.lifespan": "3"
+      },
+      "protocolMappers": [
+        {
+          "name": "jungle-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "jungle-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
       "clientId": "jungle-api",
       "name": "Jungle API token introspection client",
       "enabled": true,
