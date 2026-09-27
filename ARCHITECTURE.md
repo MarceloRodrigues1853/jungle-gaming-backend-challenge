@@ -1,8 +1,7 @@
 # Decisões de arquitetura
 
-Este documento acompanha a implementação em etapas. Cada seção distingue garantias
-já implementadas de decisões que dependem das próximas camadas, para não apresentar
-como concluído algo que ainda não foi construído.
+Este documento registra as decisões da solução concluída, as garantias implementadas,
+as evidências de teste e as limitações deliberadas do projeto.
 
 ## Domínio financeiro implementado
 
@@ -11,8 +10,8 @@ como concluído algo que ainda não foi construído.
 `domain.Money` armazena valores em unidades mínimas (`int64`) e carrega a moeda junto
 do valor. A entrada decimal aceita exatamente duas casas e um código de três letras
 maiúsculas. Parsing, aritmética e comparação não usam ponto flutuante; overflow e
-operações entre moedas diferentes são rejeitados. A lista de moedas oficialmente
-suportadas ainda será definida pela camada de aplicação.
+operações entre moedas diferentes são rejeitados. O serviço aceita qualquer código
+ISO textual com esse formato e preserva a moeda em todas as validações e respostas.
 
 ### Carteira e ledger
 
