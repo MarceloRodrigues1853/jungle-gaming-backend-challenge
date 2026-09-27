@@ -40,6 +40,8 @@ services:
     environment:
       <<: *api-environment
       HTTP_ADDRESS: 0.0.0.0:8090
+      SQS_WAIT_TIME_SECONDS: 1
+      SQS_VISIBILITY_TIMEOUT_SECONDS: 1
     ports:
       - "127.0.0.1:8091:8090"
 
@@ -49,6 +51,8 @@ services:
     environment:
       <<: *api-environment
       HTTP_ADDRESS: 0.0.0.0:8090
+      SQS_WAIT_TIME_SECONDS: 1
+      SQS_VISIBILITY_TIMEOUT_SECONDS: 1
     ports:
       - "127.0.0.1:8092:8090"
 
@@ -58,6 +62,8 @@ services:
     environment:
       <<: *api-environment
       HTTP_ADDRESS: 0.0.0.0:8090
+      SQS_WAIT_TIME_SECONDS: 1
+      SQS_VISIBILITY_TIMEOUT_SECONDS: 1
     ports:
       - "127.0.0.1:8093:8090"
 

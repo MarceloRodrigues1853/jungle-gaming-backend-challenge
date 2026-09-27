@@ -17,6 +17,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
 
 var distributedEndpoints = []string{
@@ -27,10 +32,8 @@ var distributedEndpoints = []string{
 
 // TestThreeIndependentProcessesPreserveFinancialConsistency demonstra as
 // garantias mais importantes usando três binários, pools e memórias separados.
-func TestThreeIndependentProcessesPreserveFinancialConsistency(t *testing.T) {
-	if os.Getenv("JUNGLE_DISTRIBUTED_TEST") != "1" {
-		t.Skip("set JUNGLE_DISTRIBUTED_TEST=1 with the distributed Compose profile running")
-	}
+func TestDistributedThreeProcessesPreserveFinancialConsistency(t *testing.T) {
+	requireDistributedEnvironment(t)
 	client := &http.Client{Timeout: 10 * time.Second}
 	waitForAPIs(t, client)
 	internalToken := clientCredentialsToken(t, client, "wallet-internal", "wallet-internal-local-secret")
@@ -59,6 +62,104 @@ func TestThreeIndependentProcessesPreserveFinancialConsistency(t *testing.T) {
 	assertReplay(t, client, providerToken, requests)
 }
 
+// TestDistributedHTTPAndSQSShareIdempotency cruza os dois transportes e depois
+// repete a mesma operação cinquenta vezes em paralelo sem duplicar o débito.
+func TestDistributedHTTPAndSQSShareIdempotency(t *testing.T) {
+	requireDistributedEnvironment(t)
+	client := &http.Client{Timeout: 10 * time.Second}
+	waitForAPIs(t, client)
+	internalToken := clientCredentialsToken(t, client, "wallet-internal", "wallet-internal-local-secret")
+	providerToken := clientCredentialsToken(t, client, "provider-a", "provider-a-local-secret")
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	playerID := "cross-transport-player-" + suffix
+	wallet := openWallet(t, client, distributedEndpoints[0], internalToken, playerID)
+	wager := newBetWithAmount("cross-transport-bet-"+suffix, wallet.ID, playerID, "25.00")
+
+	queue := newSQSClient(t)
+	start := make(chan struct{})
+	var httpStatus int
+	var httpErr, sqsErr error
+	var group sync.WaitGroup
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		<-start
+		httpStatus, httpErr = submitWagerRequest(client, distributedEndpoints[1], providerToken, wager)
+	}()
+	go func() {
+		defer group.Done()
+		<-start
+		sqsErr = sendWagerMessage(context.Background(), queue, wager, "cross-message-"+suffix)
+	}()
+	close(start)
+	group.Wait()
+	if httpErr != nil || sqsErr != nil {
+		t.Fatalf("cross transport errors = HTTP %v, SQS %v", httpErr, sqsErr)
+	}
+	if httpStatus != http.StatusCreated && httpStatus != http.StatusOK {
+		t.Fatalf("HTTP race status = %d, want 201 or replay 200", httpStatus)
+	}
+	waitForProviderTransaction(t, client, providerToken, wager.ExternalTransactionID)
+
+	statuses := submitRepeatedly(t, client, providerToken, wager, 50)
+	for index, status := range statuses {
+		if status != http.StatusOK {
+			t.Fatalf("parallel replay %d status = %d, want 200", index, status)
+		}
+	}
+	assertWalletBalanceAndLedgerCount(t, client, internalToken, wallet.ID, "75.00", 2)
+}
+
+// TestDistributedInvalidMessageReachesDLQ comprova o redrive real configurado
+// no LocalStack depois de cinco recebimentos sem confirmação.
+func TestDistributedInvalidMessageReachesDLQ(t *testing.T) {
+	requireDistributedEnvironment(t)
+	queue := newSQSClient(t)
+	messageID := fmt.Sprintf("invalid-message-%d", time.Now().UnixNano())
+	body := fmt.Sprintf(`{"messageId":%q,"type":"UnsupportedEvent","occurredAt":"2026-09-27T00:00:00Z","data":{}}`, messageID)
+	_, err := queue.SendMessage(context.Background(), &sqs.SendMessageInput{
+		QueueUrl:    aws.String("http://127.0.0.1:4566/000000000000/wager-transactions.fifo"),
+		MessageBody: aws.String(body), MessageGroupId: aws.String("invalid-messages"),
+		MessageDeduplicationId: aws.String(messageID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		output, receiveErr := queue.ReceiveMessage(context.Background(), &sqs.ReceiveMessageInput{
+			QueueUrl:            aws.String("http://127.0.0.1:4566/000000000000/wager-transactions-dlq.fifo"),
+			MaxNumberOfMessages: 10, WaitTimeSeconds: 1, VisibilityTimeout: 1,
+		})
+		if receiveErr != nil {
+			t.Fatal(receiveErr)
+		}
+		for _, message := range output.Messages {
+			if aws.ToString(message.Body) != body {
+				continue
+			}
+			_, deleteErr := queue.DeleteMessage(context.Background(), &sqs.DeleteMessageInput{
+				QueueUrl:      aws.String("http://127.0.0.1:4566/000000000000/wager-transactions-dlq.fifo"),
+				ReceiptHandle: message.ReceiptHandle,
+			})
+			if deleteErr != nil {
+				t.Fatal(deleteErr)
+			}
+			return
+		}
+	}
+	t.Fatalf("message %s did not reach the DLQ", messageID)
+}
+
+func requireDistributedEnvironment(t *testing.T) {
+	t.Helper()
+	if os.Getenv("JUNGLE_DISTRIBUTED_TEST") != "1" {
+		t.Skip("set JUNGLE_DISTRIBUTED_TEST=1 with the distributed Compose profile running")
+	}
+}
+
 type walletResponse struct {
 	ID      string `json:"id"`
 	Balance money  `json:"balance"`
@@ -81,9 +182,13 @@ type wagerRequest struct {
 }
 
 func newBet(externalID, walletID, playerID string) wagerRequest {
+	return newBetWithAmount(externalID, walletID, playerID, "80.00")
+}
+
+func newBetWithAmount(externalID, walletID, playerID, amount string) wagerRequest {
 	return wagerRequest{ProviderID: "provider-a", ExternalTransactionID: externalID,
 		PlayerID: playerID, WalletID: walletID, RoundID: "distributed-round",
-		GameID: "distributed-game", Kind: "BET", Money: money{Amount: "80.00", Currency: "BRL"}}
+		GameID: "distributed-game", Kind: "BET", Money: money{Amount: amount, Currency: "BRL"}}
 }
 
 func openWallet(t *testing.T, client *http.Client, endpoint, token, playerID string) walletResponse {
@@ -137,6 +242,144 @@ func submitConcurrently(t *testing.T, client *http.Client, token string, request
 		}
 	}
 	return statuses
+}
+
+// newSQSClient aponta o SDK para o LocalStack real usado pelo ambiente Compose.
+func newSQSClient(t *testing.T) *sqs.Client {
+	t.Helper()
+	configuration, err := awsconfig.LoadDefaultConfig(context.Background(),
+		awsconfig.WithRegion("us-east-1"),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
+	)
+	if err != nil {
+		t.Fatalf("load SQS configuration: %v", err)
+	}
+	return sqs.NewFromConfig(configuration, func(options *sqs.Options) {
+		options.BaseEndpoint = aws.String("http://127.0.0.1:4566")
+	})
+}
+
+// submitWagerRequest executa uma chamada sem usar testing.T dentro da goroutine.
+func submitWagerRequest(client *http.Client, endpoint, token string, wager wagerRequest) (int, error) {
+	encoded, err := json.Marshal(wager)
+	if err != nil {
+		return 0, err
+	}
+	request, err := http.NewRequest(http.MethodPost, endpoint+"/wagering/transactions", bytes.NewReader(encoded))
+	if err != nil {
+		return 0, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "provider-a:"+wager.ExternalTransactionID)
+	response, err := client.Do(request)
+	if err != nil {
+		return 0, err
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, response.Body)
+	return response.StatusCode, nil
+}
+
+// sendWagerMessage publica o mesmo contrato financeiro pela fila FIFO.
+func sendWagerMessage(ctx context.Context, client *sqs.Client, wager wagerRequest, messageID string) error {
+	envelope := struct {
+		MessageID  string       `json:"messageId"`
+		Type       string       `json:"type"`
+		OccurredAt string       `json:"occurredAt"`
+		Data       wagerMessage `json:"data"`
+	}{
+		MessageID: messageID, Type: "WagerTransactionRequested", OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Data: wagerMessage{wagerRequest: wager, IdempotencyKey: "provider-a:" + wager.ExternalTransactionID},
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	_, err = client.SendMessage(ctx, &sqs.SendMessageInput{
+		QueueUrl:    aws.String("http://127.0.0.1:4566/000000000000/wager-transactions.fifo"),
+		MessageBody: aws.String(string(body)), MessageGroupId: aws.String(wager.WalletID),
+		MessageDeduplicationId: aws.String(messageID),
+	})
+	return err
+}
+
+// wagerMessage adiciona a chave de idempotência ao contrato comum da operação.
+type wagerMessage struct {
+	wagerRequest
+	IdempotencyKey string `json:"idempotencyKey"`
+}
+
+// waitForProviderTransaction aguarda até o consumidor SQS persistir um estado terminal.
+func waitForProviderTransaction(t *testing.T, client *http.Client, token, externalID string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		response := doJSON(t, client, http.MethodGet,
+			distributedEndpoints[2]+"/providers/provider-a/wagering/transactions/"+url.PathEscape(externalID), token, "", nil)
+		if response.StatusCode == http.StatusOK {
+			var transaction struct {
+				Status string `json:"status"`
+			}
+			decodeResponse(t, response, &transaction)
+			_ = response.Body.Close()
+			if transaction.Status == "PROCESSED" || transaction.Status == "REJECTED" || transaction.Status == "FAILED" {
+				return
+			}
+		} else {
+			_ = response.Body.Close()
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("transaction %s did not reach a terminal state", externalID)
+}
+
+// submitRepeatedly distribui os reenvios pelas três instâncias simultaneamente.
+func submitRepeatedly(t *testing.T, client *http.Client, token string, wager wagerRequest, count int) []int {
+	t.Helper()
+	statuses := make([]int, count)
+	errorsByRequest := make([]error, count)
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	for index := 0; index < count; index++ {
+		group.Add(1)
+		go func(index int) {
+			defer group.Done()
+			<-start
+			statuses[index], errorsByRequest[index] = submitWagerRequest(client,
+				distributedEndpoints[index%len(distributedEndpoints)], token, wager)
+		}(index)
+	}
+	close(start)
+	group.Wait()
+	for index, err := range errorsByRequest {
+		if err != nil {
+			t.Fatalf("parallel replay %d: %v", index, err)
+		}
+	}
+	return statuses
+}
+
+// assertWalletBalanceAndLedgerCount verifica o efeito financeiro final em outra instância.
+func assertWalletBalanceAndLedgerCount(t *testing.T, client *http.Client, token, walletID, expectedBalance string, expectedLedgerCount int) {
+	t.Helper()
+	response := doJSON(t, client, http.MethodGet, distributedEndpoints[0]+"/wallets/"+walletID, token, "", nil)
+	defer response.Body.Close()
+	var wallet walletResponse
+	decodeResponse(t, response, &wallet)
+	if response.StatusCode != http.StatusOK || wallet.Balance.Amount != expectedBalance {
+		t.Fatalf("wallet status/balance = %d/%s, want 200/%s", response.StatusCode, wallet.Balance.Amount, expectedBalance)
+	}
+
+	ledgerResponse := doJSON(t, client, http.MethodGet, distributedEndpoints[1]+"/wallets/"+walletID+"/ledger?limit=50", token, "", nil)
+	defer ledgerResponse.Body.Close()
+	var ledger struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	decodeResponse(t, ledgerResponse, &ledger)
+	if ledgerResponse.StatusCode != http.StatusOK || len(ledger.Items) != expectedLedgerCount {
+		t.Fatalf("ledger status/entries = %d/%d, want 200/%d", ledgerResponse.StatusCode, len(ledger.Items), expectedLedgerCount)
+	}
 }
 
 func assertWalletAndLedger(t *testing.T, client *http.Client, token, walletID string) {

@@ -74,8 +74,14 @@ go test -race ./...
 ```
 
 No Windows sem `gcc`, `go test -race` informa que CGO não está disponível; isso é
-uma limitação do host, não uma substituição da suíte normal. Os testes de integração
-criam dados com IDs únicos e não apagam o ledger.
+uma limitação do host. A mesma verificação pode ser reproduzida em Linux pelo Docker:
+
+```sh
+docker run --rm -v "${PWD}:/src" -w /src golang:1.26.4-alpine3.23 sh -c \
+  "apk add --no-cache gcc musl-dev && go test -race ./..."
+```
+
+Os testes de integração criam dados com IDs únicos e não apagam o ledger.
 
 Teste distribuído com três processos independentes, após aplicar as migrations:
 
@@ -84,10 +90,12 @@ docker compose --profile distributed up --build -d api-1 api-2 api-3
 JUNGLE_DISTRIBUTED_TEST=1 go test -v ./internal/e2e -count=1
 ```
 
-No PowerShell, defina `$env:JUNGLE_DISTRIBUTED_TEST = "1"` antes do `go test`. O teste
-usa Keycloak e PostgreSQL reais, envia as duas apostas concorrentes de `80.00` para
-processos diferentes, reinicia as três APIs e então valida saldo, ledger,
-reconciliação e replays. As instâncias usam as portas `8091`, `8092` e `8093`.
+No PowerShell, defina `$env:JUNGLE_DISTRIBUTED_TEST = "1"` antes do `go test`. A suíte
+usa Keycloak, PostgreSQL e LocalStack reais. Ela disputa duas apostas de `80.00` em
+processos diferentes, reinicia as três APIs, cruza HTTP e SQS para a mesma operação,
+executa 50 reenvios paralelos e comprova o redrive de uma mensagem inválida para a
+DLQ após cinco recebimentos. Ao final valida saldo, ledger, reconciliação e replays.
+As instâncias usam as portas `8091`, `8092` e `8093`.
 
 ## Componentes principais
 

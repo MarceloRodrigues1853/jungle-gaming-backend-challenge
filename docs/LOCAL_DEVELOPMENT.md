@@ -104,10 +104,23 @@ $env:JUNGLE_DISTRIBUTED_TEST = "1"
 go test -v ./internal/e2e -count=1
 ```
 
-O teste obtém tokens `client_credentials` reais, usa as portas `8091`, `8092` e
-`8093`, disputa duas apostas sobre a mesma carteira e reinicia os três serviços. Após
-o reinício, ele confirma saldo `20.00`, dois lançamentos no ledger (abertura e um
-débito), reconciliação sem diferença e replay idempotente das duas operações.
+Os testes obtêm tokens `client_credentials` reais e usam as portas `8091`, `8092` e
+`8093`. O primeiro disputa duas apostas sobre a mesma carteira e reinicia os três
+serviços; após o reinício, confirma saldo `20.00`, dois lançamentos no ledger,
+reconciliação sem diferença e replay idempotente. O segundo envia a mesma aposta
+simultaneamente por HTTP e pela fila real, executa mais 50 reenvios concorrentes e
+confirma um único débito. O terceiro envia um evento inválido e aguarda o redrive real
+para `wager-transactions-dlq.fifo` após cinco recebimentos.
+
+O perfil distribuído reduz apenas os tempos de espera e visibilidade do consumidor
+para um segundo. Isso mantém a política de cinco recebimentos, mas permite verificar
+a DLQ localmente sem esperar vários minutos.
+
+Para reproduzir `go test -race` no Windows sem instalar um compilador C:
+
+```powershell
+docker run --rm -v "${PWD}:/src" -w /src golang:1.26.4-alpine3.23 sh -c "apk add --no-cache gcc musl-dev && go test -race ./..."
+```
 
 ## Token no Postman
 
